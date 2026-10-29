@@ -7,7 +7,8 @@ import { installWaha, findApp, nextWahaNumber } from './installer.js';
 import { isWaha } from './probe.js';
 import { appLogs, controlApp, deleteApp, deployApp } from './ops.js';
 import { checkWaha, listSessions } from './waha.js';
-import type { FleetCfg, PendingAction, ServerCfg, ServerSnapshot, WahaHealth } from './types.js';
+import type { FleetCfg, PendingAction, ServerCfg, ServerSnapshot, Severity, WahaHealth } from './types.js';
+import type { StatsSummary } from './pg.js';
 
 export interface BotDeps {
   db: Db;
@@ -18,7 +19,32 @@ export interface BotDeps {
   setReadOnly: (value: boolean) => void;
   wahaKey: () => string;
   wahaHealth: () => Map<string, WahaHealth[]>;
+  recordAction?: (a: {
+    chatId: number;
+    userId: number;
+    command: string;
+    args: unknown;
+    result: string;
+    ok: boolean;
+    durationMs: number;
+  }) => void;
+  stats?: (days: number) => Promise<StatsSummary | null>;
   log: (line: string) => void;
+}
+
+interface AuditEntry {
+  chatId: number;
+  userId: number;
+  command: string;
+  args: unknown;
+  result: string;
+  ok: boolean;
+  durationMs: number;
+}
+
+function audit(deps: BotDeps, entry: AuditEntry): void {
+  deps.db.addAction(entry);
+  deps.recordAction?.(entry);
 }
 
 function resolveAlias(input: string, fleet: FleetCfg): string | null {
@@ -274,6 +300,70 @@ export function createBot(deps: BotDeps): Bot {
     });
   });
 
+  bot.command(['stats', 'estadisticas'], async (ctx) => {
+    const arg = (ctx.match ?? '').trim();
+    const days = Math.min(Math.max(Number(arg) || 7, 1), 90);
+    if (!deps.stats) {
+      await ctx.reply('Histórico no configurado (falta DATABASE_URL en el servicio).');
+      return;
+    }
+    let summary: StatsSummary | null = null;
+    try {
+      summary = await deps.stats(days);
+    } catch (err) {
+      await ctx.reply(`No pude leer el histórico: ${(err as Error).message}`);
+      return;
+    }
+    if (!summary) {
+      await ctx.reply('Histórico no configurado.');
+      return;
+    }
+    if (!summary.uptime.length) {
+      await ctx.reply(`Sin datos en los últimos ${days} días todavía.`);
+      return;
+    }
+
+    const uptimeRows = summary.uptime.map((u) => [
+      u.alias,
+      `${u.uptime.toFixed(2)}%`,
+      String(u.samples),
+      u.cpuAvg === null ? '–' : `${u.cpuAvg.toFixed(0)}%`,
+      u.memAvg === null ? '–' : `${u.memAvg.toFixed(0)}%`,
+      u.diskAvg === null ? '–' : `${u.diskAvg.toFixed(0)}%`,
+    ]);
+
+    const wahaRows = summary.wahaAvailability.map((w) => [
+      w.alias,
+      `${w.availability.toFixed(1)}%`,
+      String(w.checks),
+    ]);
+
+    const top = summary.topAlerts.length
+      ? summary.topAlerts
+          .slice(0, 8)
+          .map((a) => `${severityIcon(a.severity as Severity)} ${esc(a.title)} ×${a.count}`)
+          .join('\n')
+      : 'sin alertas';
+
+    const days7 = summary.alertsByDay.slice(0, 10).map((d) => `${d.day}  ${d.severity.padEnd(7)} ${d.count}`);
+
+    const blocks = [
+      `<b>Estadísticas · últimos ${days} días</b>`,
+      '',
+      '<b>Uptime por servidor</b>',
+      pre(table(uptimeRows, ['srv', 'uptime', 'muestras', 'cpu', 'mem', 'disco'])),
+      '',
+      '<b>Disponibilidad WAHA</b>',
+      wahaRows.length ? pre(table(wahaRows, ['srv', 'http ok', 'chequeos'])) : 'sin chequeos',
+      '',
+      '<b>Alertas más frecuentes</b>',
+      top,
+      days7.length ? `\n<b>Alertas por día</b>\n${pre(days7.join('\n'))}` : '',
+    ];
+
+    await ctx.reply(blocks.filter(Boolean).join('\n'), { parse_mode: 'HTML' });
+  });
+
   bot.command('incidentes', async (ctx) => {
     const incidents = deps.db.openIncidents();
     if (!incidents.length) {
@@ -377,7 +467,7 @@ export function createBot(deps: BotDeps): Bot {
         [`<b>Resultado</b>`, ...lines, '', pre(progress.slice(-10).join('\n'))].join('\n'),
         { parse_mode: 'HTML' },
       );
-      deps.db.addAction({
+      audit(deps, {
         chatId: ctx.chat.id,
         userId: ctx.from?.id ?? 0,
         command: 'instalar',
@@ -507,7 +597,7 @@ async function runAction(ctx: Context, deps: BotDeps, action: PendingAction): Pr
     else if (action.command === 'stop') result = await controlApp(server, appUuid, 'stop');
     else if (action.command === 'delete') result = await deleteApp(server, appUuid);
     else result = 'acción desconocida';
-    deps.db.addAction({
+    audit(deps, {
       chatId: action.chatId,
       userId: action.userId,
       command: action.command,
@@ -520,7 +610,7 @@ async function runAction(ctx: Context, deps: BotDeps, action: PendingAction): Pr
     void deps.refresh();
   } catch (err) {
     const message = (err as Error).message;
-    deps.db.addAction({
+    audit(deps, {
       chatId: action.chatId,
       userId: action.userId,
       command: action.command,
@@ -546,6 +636,7 @@ function helpText(deps: BotDeps): string {
     '/buscar &lt;texto&gt; — busca apps y dominios',
     '/logs &lt;wahaNN&gt; [líneas] — últimos logs',
     '/incidentes — incidentes abiertos',
+    '/stats [días] — uptime, disponibilidad y alertas del histórico',
     '/auditoria — últimas acciones',
     '',
     '<b>Acciones</b>',

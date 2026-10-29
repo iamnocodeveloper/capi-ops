@@ -32,6 +32,10 @@ export interface EngineOptions {
   renotifyMs: number;
   quiet: QuietHours | null;
   log?: (line: string) => void;
+  record?: {
+    opened: (key: string, severity: Severity, title: string, detail: string) => void;
+    resolved: (key: string) => void;
+  };
 }
 
 /**
@@ -53,6 +57,7 @@ export class AlertEngine {
       const open = this.db.openIncident(finding.key);
       if (!open) {
         const row = this.db.createIncident(finding.key, finding.severity, finding.title, finding.detail);
+        this.opts.record?.opened(finding.key, finding.severity, finding.title, finding.detail);
         await this.maybeNotify(row.severity, this.renderOpen(finding));
         this.opts.log?.(`incidente abierto: ${finding.key} (${finding.severity})`);
         continue;
@@ -78,6 +83,7 @@ export class AlertEngine {
       if (active.has(incident.key)) continue;
       const resolved = this.db.resolveIncident(incident.key);
       if (!resolved) continue;
+      this.opts.record?.resolved(incident.key);
       this.opts.log?.(`incidente resuelto: ${incident.key}`);
       await this.maybeNotify('info', [
         `✅ <b>Recuperado</b> — ${escape(resolved.title)}`,

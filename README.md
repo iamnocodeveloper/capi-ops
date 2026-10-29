@@ -263,12 +263,41 @@ git. Se versiona solo [`config/servers.example.json`](./config/servers.example.j
 
 ---
 
+## 📈 Histórico y estadísticas
+
+Además del SQLite operativo, el servicio puede escribir todo lo que ve en un **Postgres** para
+consultar tendencias: `DATABASE_URL` habilita las tablas `servers`, `server_samples`, `waha_checks`,
+`incidents`, `actions` e `inventory`. Si la variable está vacía, todo funciona igual pero sin
+histórico.
+
+Qué se guarda en cada ciclo:
+
+| Tabla | Contenido |
+|---|---|
+| `server_samples` | por servidor: reachable, CPU, memoria, disco, load, apps, deploys en curso y error |
+| `waha_checks` | por instancia: HTTP, DNS, engine, versión y motivo del fallo |
+| `incidents` | tipo (clave), severidad, título, apertura y resolución |
+| `actions` | cada comando del bot con usuario, resultado y duración |
+| `inventory` | instancia, UUID y dominio, con primera y última vez vistos |
+
+Consultas listas:
+
+```bash
+curl -s "http://localhost:8080/stats?days=7" | jq
+```
+
+O desde Telegram con `/stats 7`, que devuelve uptime por servidor, disponibilidad de las instancias y
+las alertas más frecuentes del período.
+
+---
+
 ## 🔌 API
 
 | Endpoint | Qué devuelve |
 |---|---|
 | `GET /health` | Estado del servicio y snapshot de la flota |
 | `GET /metrics` | Métricas en formato Prometheus |
+| `GET /stats?days=7` | Uptime por servidor, disponibilidad WAHA, alertas y acciones del histórico |
 | `POST /intent` | Hook para un front LLM. Requiere header `x-ops-token` y solo acepta intents de un enum cerrado |
 
 ```bash

@@ -9,6 +9,16 @@ import { TelegramNotifier } from './telegram.js';
 import { checkWaha, mapLimit } from './waha.js';
 import type { FleetCfg, ServerSnapshot, WahaHealth } from './types.js';
 import { refreshInventory } from './installer.js';
+import {
+  initAnalytics,
+  loadStats,
+  recordAction,
+  recordIncidentOpen,
+  recordIncidentResolved,
+  recordInventory,
+  recordSamples,
+  recordWahaChecks,
+} from './pg.js';
 
 const startedAt = Date.now();
 const levels = { debug: 10, info: 20, warn: 30, error: 40 } as const;
@@ -29,6 +39,10 @@ const engine = new AlertEngine(db, (text, severity) => notifier.broadcast(text, 
   renotifyMs: thresholds.renotifyMs,
   quiet,
   log: (l) => log(l, 'debug'),
+  record: {
+    opened: (key, severity, title, detail) => recordIncidentOpen(key, severity, title, detail),
+    resolved: (key) => recordIncidentResolved(key),
+  },
 });
 
 let snapshots: ServerSnapshot[] = [];
@@ -77,6 +91,12 @@ async function refresh(force = false): Promise<ServerSnapshot[]> {
   lastRefreshAt = Date.now();
   try {
     await refreshInventory(db, snapshots);
+    for (const snap of snapshots) {
+      recordInventory(
+        snap.alias,
+        snap.apps.map((a) => ({ name: a.name, uuid: a.uuid, fqdn: a.fqdn })),
+      );
+    }
   } catch (err) {
     log(`no se pudo refrescar inventario: ${(err as Error).message}`, 'warn');
   }
@@ -114,6 +134,7 @@ async function probeWahaFleet(force = false): Promise<void> {
 
   wahaHealth = next;
   wahaProbedAt = Date.now();
+  for (const [alias, health] of next) recordWahaChecks(alias, health);
   log(`waha probe: ${tasks.length} dominios en ${Date.now() - started} ms`, 'debug');
 }
 
@@ -214,6 +235,8 @@ const bot = telegramCfg.enabled
       },
       wahaKey: () => wahaApiKey(),
       wahaHealth: () => wahaHealth,
+      recordAction,
+      stats: (days: number) => loadStats(days),
       log: (l) => log(l, 'warn'),
     })
   : null;
@@ -229,6 +252,8 @@ const http = startHttp({
   },
   wahaKey: () => wahaApiKey(),
   wahaHealth: () => wahaHealth,
+  recordAction,
+  stats: (days: number) => loadStats(days),
   log,
   startedAt,
   lastCycleAt: () => lastCycleAt,
@@ -237,6 +262,7 @@ const http = startHttp({
 
 async function main(): Promise<void> {
   log(`capi-ops arrancando · ${fleet.servers.length} servidores · telegram ${telegramCfg.enabled ? 'on' : 'off'} · solo-lectura ${readOnly}`);
+  await initAnalytics((line, level) => log(line, level ?? 'info'));
   await cycle();
 
   setInterval(() => {

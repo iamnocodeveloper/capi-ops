@@ -3,12 +3,14 @@ import { env, telegramCfg } from './config.js';
 import type { BotDeps } from './bot.js';
 import { installWaha } from './installer.js';
 import type { Db } from './db.js';
+import type { StatsSummary } from './pg.js';
 import type { FleetCfg, ServerSnapshot } from './types.js';
 
 export interface HttpDeps extends BotDeps {
   startedAt: number;
   lastCycleAt: () => number;
   notify: (text: string) => Promise<void>;
+  stats?: (days: number) => Promise<StatsSummary | null>;
 }
 
 export function startHttp(deps: HttpDeps): { close: () => void } {
@@ -49,6 +51,13 @@ export function startHttp(deps: HttpDeps): { close: () => void } {
         res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4' });
         res.end(`${lines.join('\n')}\n`);
         return;
+      }
+
+      if (req.method === 'GET' && url.pathname === '/stats') {
+        const days = Number(url.searchParams.get('days') ?? '7');
+        if (!deps.stats) return json(res, 503, { ok: false, error: 'histórico no configurado' });
+        const summary = await deps.stats(Number.isFinite(days) ? days : 7);
+        return json(res, summary ? 200 : 503, summary ?? { ok: false, error: 'histórico no configurado' });
       }
 
       if (req.method === 'POST' && url.pathname === '/intent') {

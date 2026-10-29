@@ -3,6 +3,15 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 Versionado semántico.
 
+## [0.4.0] — 2026-10-29
+
+### Agregado
+- Histórico en **Postgres** (`DATABASE_URL`): `server_samples`, `waha_checks`, `incidents`, `actions`,
+  `inventory` y `servers`. Si la variable no está, el servicio arranca igual y opera solo con SQLite.
+- `GET /stats?days=N` y comando `/stats [días]` en Telegram: uptime por servidor, disponibilidad de
+  las instancias, alertas más frecuentes y acciones del período.
+- Las acciones del bot se auditan también en Postgres.
+
 ## [0.3.0] — 2026-10-29
 
 ### Agregado
