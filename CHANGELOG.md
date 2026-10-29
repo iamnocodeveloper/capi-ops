@@ -3,6 +3,21 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 Versionado semántico.
 
+## [0.3.0] — 2026-10-29
+
+### Agregado
+- Guía [`docs/higiene-disco.md`](./docs/higiene-disco.md): qué ocupa disco en un host Coolify+WAHA,
+  diagnóstico, limpieza de host y procedimiento de purga del store con rollback.
+- Herramientas: `scripts/diag-disco.sh`, `scripts/inspect-store.js`, `scripts/purgar-store.js`.
+- Docker Cleanup configurado en los servidores vía MCP (diario, umbral 70%, volúmenes protegidos).
+
+### Corregido
+- Documentado que el media de WAHA **no** se acumula: sin `WHATSAPP_FILES_FOLDER` se borra a los 180 s.
+
+### Notas
+- El store de GOWS no tiene retención configurable; se controla con `config.gows.storage.*` por sesión.
+- Regla de alcance incorporada: no se toca ninguna sesión que no esté explícitamente nombrada.
+
 ## [0.2.0] — 2026-10-29
 
 ### Agregado

@@ -319,6 +319,7 @@ docs/           arquitectura, operación y assets
 |---|---|
 | [`docs/arquitectura.md`](./docs/arquitectura.md) | Decisiones con su motivo, flujo del ciclo, módulos, modelo de datos y puntos de extensión. |
 | [`docs/operacion.md`](./docs/operacion.md) | Runbook: deploy, workaround de recreación, rotación de tokens, alta de paneles, troubleshooting. |
+| [`docs/higiene-disco.md`](./docs/higiene-disco.md) | Qué ocupa disco, diagnóstico, limpieza de host y purga del store de WAHA con rollback. |
 | [`CHANGELOG.md`](./CHANGELOG.md) | Historial de versiones. |
 
 ---
