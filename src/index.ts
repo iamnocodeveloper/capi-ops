@@ -143,6 +143,7 @@ async function cycle(): Promise<void> {
   try {
     const snaps = await refresh(true);
     await probeWahaFleet(false);
+    recordSamples(snaps);
 
     for (const snap of snaps) {
       if (snap.metrics.cpuPercent !== null || snap.metrics.memPercent !== null) {
