@@ -3,6 +3,19 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 Versionado semántico.
 
+## [0.5.0] — 2026-10-29
+
+### Agregado
+- [`docs/RETOMAR.md`](./docs/RETOMAR.md): documento de traspaso con estado, verificación en cinco
+  minutos, decisiones, pendientes priorizados y reglas de oro.
+- Sección de operación de la base histórica en [`docs/operacion.md`](./docs/operacion.md): verificación,
+  backup con `pg_dump` y consultas de retención.
+
+### Cierre de etapa
+- Servicio en producción con Telegram activo, histórico escribiendo y notificaciones nativas en todos
+  los paneles.
+- Pendientes documentados y priorizados; nada queda a medias sin registro.
+
 ## [0.4.0] — 2026-10-29
 
 ### Agregado

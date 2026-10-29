@@ -105,6 +105,41 @@ servicio. El servicio escribe en stdout con nivel `LOG_LEVEL` (`debug` muestra c
 El único estado propio es `/data/state.sqlite`. Se puede perder sin drama: incidentes y métricas se
 regeneran y la numeración se recalcula desde las apps vivas. Para respaldarlo, copiar el volumen.
 
+## Base del histórico (Postgres)
+
+El servicio escribe en Postgres cuando existe `DATABASE_URL`. Si la base no está disponible, el
+watcher y el bot siguen funcionando: solo se pierde el histórico (los inserts fallan en silencio).
+
+**Verificar que escribe**
+
+```sql
+select 'server_samples' t, count(*) from server_samples
+union all select 'waha_checks', count(*) from waha_checks
+union all select 'incidents', count(*) from incidents
+union all select 'actions', count(*) from actions;
+```
+
+**Backup**
+
+```bash
+docker exec <contenedor-postgres> pg_dump -U <usuario> -d <base> -Fc > backup-$(date +%F).dump
+```
+
+**Retención sugerida** (todavía no está automatizada)
+
+```sql
+-- muestras y chequeos: 30 días
+delete from server_samples where ts < now() - interval '30 days';
+delete from waha_checks   where ts < now() - interval '30 days';
+-- incidentes: 180 días (los resueltos)
+delete from incidents where resolved_at is not null and resolved_at < now() - interval '180 days';
+-- acciones: 1 año
+delete from actions where ts < now() - interval '365 days';
+```
+
+Correr una vez por semana desde una tarea programada del panel o desde `psql`. Sin retención, las dos
+tablas de muestreo crecen del orden de miles de filas por día.
+
 ## Seguridad
 
 - Allowlist por chat y usuario; el bot ignora y loguea cualquier otro origen.
