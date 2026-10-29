@@ -1,0 +1,11 @@
+node_modules
+dist
+data
+.env
+.env.*
+*.log
+msg.txt
+config/servers.json
+.git
+.github
+scripts

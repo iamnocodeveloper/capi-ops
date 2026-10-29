@@ -1,0 +1,25 @@
+{
+  "domainBase": "example.com",
+  "waha": {
+    "imageName": "devlikeapro/waha",
+    "imageTag": "latest",
+    "portsExposes": "80",
+    "apiKeyEnv": "WAHA_API_KEY",
+    "engine": "GOWS",
+    "dashboardUser": "admin"
+  },
+  "servers": [
+    {
+      "alias": "capi1",
+      "name": "Servidor 1",
+      "url": "https://coolify-1.example.com/mcp",
+      "tokenEnv": "CAPI1_TOKEN",
+      "ip": "203.0.113.10",
+      "projectUuid": "project-uuid-1",
+      "environmentName": "production",
+      "serverUuid": "server-uuid-1",
+      "destinationUuid": "destination-uuid-1",
+      "wahaRange": [1, 10]
+    }
+  ]
+}
