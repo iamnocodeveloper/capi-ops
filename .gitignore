@@ -8,3 +8,4 @@ data/
 msg.txt
 config/servers.json
 .DS_Store
+redeploy-result.json

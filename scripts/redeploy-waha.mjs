@@ -1,3 +1,6 @@
+// Redespliega un rango de instancias y verifica el resultado.
+// Uso: node scripts/redeploy-waha.mjs <alias> <desde> <hasta>
+//   node scripts/redeploy-waha.mjs capi4 46 51
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const parseEnv = (file) => {
@@ -14,9 +17,21 @@ const parseEnv = (file) => {
 
 const env = parseEnv('.env');
 const fleet = JSON.parse(readFileSync('config/servers.json', 'utf8'));
-const srv = fleet.servers.find((s) => s.alias === 'capi4');
+
+const [aliasArg, fromArg, toArg] = process.argv.slice(2);
+if (!aliasArg || !fromArg || !toArg) {
+  console.error('uso: node scripts/redeploy-waha.mjs <alias> <desde> <hasta>');
+  process.exit(1);
+}
+const srv = fleet.servers.find((s) => s.alias === aliasArg);
+if (!srv) {
+  console.error(`servidor desconocido: ${aliasArg}`);
+  process.exit(1);
+}
 const token = env[srv.tokenEnv];
 const url = srv.url;
+const from = Number(fromArg);
+const to = Number(toArg);
 
 let seq = 1;
 const rpc = async (method, params) => {
@@ -53,7 +68,7 @@ await rpc('initialize', {
 });
 
 const targets = [];
-for (const n of [46, 47, 48, 49, 50, 51]) targets.push(`waha${n}`);
+for (let n = from; n <= to; n++) targets.push(`waha${n}`);
 
 const apps = (await call('list_applications', { per_page: 100 })).data ?? [];
 const selected = targets
