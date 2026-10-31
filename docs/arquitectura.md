@@ -6,6 +6,9 @@ La flota son varios paneles Coolify independientes, cada uno con sus instancias 
 resuelve el ciclo de vida, pero no avisa de CPU/memoria, no conoce el estado real de las sesiones de
 WhatsApp y no permite operar desde el celular. capi-ops cubre ese hueco sin reemplazar a Coolify.
 
+Además vigila **el propio EasyPanel donde corre**: host, servicios, dominios y actualizaciones, sin
+Prometheus ni agentes. Eso se agregó en 0.6.0; el detalle está en [`easypanel.md`](./easypanel.md).
+
 ## Decisiones
 
 | Decisión | Alternativa descartada | Motivo |
@@ -16,6 +19,8 @@ WhatsApp y no permite operar desde el celular. capi-ops cubre ese hueco sin reem
 | SQLite embebido | Postgres/Redis | Un solo contenedor, sin dependencias; el volumen alcanza |
 | Telegram en polling | Webhook | No requiere dominio, certificado ni ingress en el host de monitoreo |
 | Health WAHA por HTTPS directo | Solo estado del contenedor | El contenedor puede estar `running` y la sesión caída |
+| REST de EasyPanel | Stack Prometheus/Grafana | El panel ya expone host, contenedores y dominios; no hace falta instalar nada |
+| Un solo bot para todo | Un bot por sistema | Menos tokens y chats; las alertas se distinguen por el prefijo `EasyPanel · …` |
 
 ## Flujo de un ciclo
 
@@ -27,10 +32,19 @@ cada POLL_SECONDS (60 s)
   │    ├─ list_deployments            (cola / en curso)
   │    └─ list_unhealthy_resources    (muestra)
   ├─ guarda muestras en `metrics`
+  ├─ refreshEp() (si EASYPANEL_URL y EASYPANEL_TOKEN)
+  │    ├─ getLegacyMonitorSystemStats   → CPU, mem, disco, load, uptime
+  │    ├─ getDockerTaskStats           → actual/desired por servicio
+  │    ├─ getMonitorTableData          → CPU y memoria por servicio
+  │    ├─ listProjectsAndServices      → inventario y tipo
+  │    ├─ listDomains                  → host y path por servicio
+  │    └─ getUpdateStatus              → versión nueva disponible
+  ├─ HTTP GET por dominio EasyPanel (concurrencia 8, timeout 8 s)
   ├─ si pasó WAHA_PROBE_SECONDS (300 s): health de cada dominio WAHA
   │    ├─ HTTPS /api/version            → httpOk, engine, version
   │    └─ si falla: DNS resolve4        → dnsOk, IPs resueltas
   ├─ evaluate(snapshot)  → hallazgos { key, severity, title, detail }
+  ├─ evaluateEasyPanel(snapshot) → hallazgos `ep:*` (host, servicios, HTTP, update)
   ├─ AlertEngine.reconcile(hallazgos)
   │    ├─ nuevo            → INSERT incidente + notificar
   │    ├─ vigente          → re-notificar solo si pasó el cooldown o cambió la severidad
@@ -71,6 +85,17 @@ settings(key, value)                                         -- last_waha_number
 
 `incidents.key` es estable (`srv:capi4:waha-dns`, `srv:capi1:cpu`, `ep:ep:svc:clientes_feroz-landing:down`)
 y es lo que permite deduplicar: mientras el hallazgo siga apareciendo, el incidente sigue abierto.
+
+## Monitoreo del panel propio
+
+`easypanel.ts` es un cliente REST mínimo (`Authorization: Bearer`, rutas planas `/api/<procedimiento>`)
+que arma un `EpSnapshot` por ciclo. Los stacks Compose que no aparecen en `getDockerTaskStats` se
+infieren `up` a partir de sus métricas de contenedor; si no hay ninguna señal, el estado es `unknown`
+y no se alerta por contenedores.
+
+Los incidentes usan claves estables `ep:<alias>:host:<regla>` y `ep:<alias>:svc:<proyecto>_<servicio>:<regla>`.
+Las muestras del host se guardan en `metrics` (SQLite) y `server_samples` (Postgres) con el alias
+configurado (`ep` por defecto), así `/stats` y el digest las incluyen sin cambios.
 
 ## Anomalías
 

@@ -18,6 +18,14 @@ Versionado semántico.
 - `/estado`, el digest diario, `/health` y `/metrics` incluyen el panel; las muestras del host se
   escriben en el histórico con el alias configurado.
 - Alertas etiquetadas por origen: `EasyPanel · cliente/servicio`, separadas de la flota Coolify.
+- Documentación: [`docs/easypanel.md`](./docs/easypanel.md) con endpoints, estados, reglas, comandos y
+  troubleshooting; runbook y traspaso actualizados.
+
+### Notas de producción
+- El deploy de EasyPanel construyó la imagen pero no recreó el contenedor (`forceRebuild`, `restart`,
+  webhook y scale a 0 fueron no-op). Se aplicó el workaround documentado **destroy + create**.
+- Consecuencia: se reinició el SQLite local (incidentes abiertos, métricas, auditoría). El histórico
+  en Postgres quedó intacto. Ver [`docs/operacion.md`](./docs/operacion.md).
 
 ## [0.5.0] — 2026-10-29
 

@@ -4,7 +4,7 @@
 
 <br/>
 
-**Un vigía que nunca duerme para tus paneles de Coolify: mide, avisa y además ejecuta lo que le pedís desde el celular.**
+**Un vigía que nunca duerme para tus paneles de Coolify y tu propio EasyPanel: mide, avisa y además ejecuta lo que le pedís desde el celular.**
 
 Node 24 · TypeScript · SQLite · MCP · bot de Telegram · sin base de datos externa
 
@@ -35,9 +35,10 @@ Node 24 · TypeScript · SQLite · MCP · bot de Telegram · sin base de datos e
 | **¿Reemplaza a Coolify?** | No. Coolify sigue siendo el panel y el dueño del ciclo de vida. capi-ops lo mira desde afuera por su servidor MCP y avisa lo que Coolify no avisa. |
 | **¿Cómo habla con los paneles?** | MCP sobre Streamable HTTP (`initialize` + `tools/call`) con un token de equipo por panel. Mismo protocolo que usaría cualquier agente. |
 | **¿Por qué no un agente con LLM?** | Porque apagar un contenedor no debería ser creativo. Las reglas son explícitas y auditables; hay un `POST /intent` para enchufar un LLM como front si algún día hace falta. |
-| **¿Dónde corre?** | En un contenedor propio, idealmente en un host distinto al que monitorea: si el watcher vive en el servidor vigilado, cuando ese servidor cae también cae el que avisa. |
+| **¿Dónde corre?** | En el propio EasyPanel que vigila, así que ese host no puede alertar su propia caída: para eso está `HEARTBEAT_URL` (healthchecks.io), el watchdog externo. |
 | **¿Necesita base de datos?** | No. SQLite embebido (`node:sqlite`) guarda incidentes, muestras, inventario y auditoría en un solo archivo. Si se pierde, se regenera. |
 | **¿Se puede usar sin Telegram?** | Sí. Sin `TG_TOKEN` corre en modo consola y las alertas se imprimen en el log. |
+| **¿Necesita Prometheus?** | No. El propio EasyPanel se lee por su API REST (`getLegacyMonitorSystemStats`, `getDockerTaskStats`, `getMonitorTableData`) y los dominios se prueban por HTTP. |
 | **¿Es seguro dejar que ejecute?** | Allowlist por chat y usuario, botón de confirmación, `delete` pide tipear parte del UUID, modo solo-lectura y auditoría de cada acción. |
 | **¿Guarda secretos en el repo?** | No. La flota se pasa por `SERVERS_JSON` o un archivo ignorado por git; los tokens se referencian por variable de entorno. |
 
@@ -365,6 +366,9 @@ docs/           arquitectura, operación y assets
   memoria y sobrevivir a un reinicio del proceso.
 - **DNS solo cuando falla el HTTP.** Resolver decenas de dominios por ciclo satura el resolver y genera
   falsos positivos; el chequeo caro se hace únicamente para clasificar el error.
+- **Un solo bot, dos fuentes.** La flota Coolify y el panel EasyPanel comparten motor de incidentes,
+  digest y comandos; el origen se distingue por la clave (`srv:…` vs `ep:…`) y por el prefijo del
+  título (`EasyPanel · cliente/servicio`).
 - **Toda acción destructiva deja rastro**: quién la pidió, desde qué chat, resultado y duración.
 - **Modo consola** para correr en local sin bot y ver las alertas como texto.
 
@@ -377,6 +381,7 @@ docs/           arquitectura, operación y assets
 | [`docs/RETOMAR.md`](./docs/RETOMAR.md) | **Empezá acá.** Estado del proyecto, verificación en cinco minutos, decisiones, pendientes y reglas de oro. |
 | [`docs/arquitectura.md`](./docs/arquitectura.md) | Decisiones con su motivo, flujo del ciclo, módulos, modelo de datos y puntos de extensión. |
 | [`docs/operacion.md`](./docs/operacion.md) | Runbook: deploy, workaround de recreación, rotación de tokens, alta de paneles, troubleshooting. |
+| [`docs/easypanel.md`](./docs/easypanel.md) | Monitoreo del panel propio: endpoints, estados, reglas, comandos, límites y troubleshooting. |
 | [`docs/higiene-disco.md`](./docs/higiene-disco.md) | Qué ocupa disco, diagnóstico, limpieza de host y purga del store de WAHA con rollback. |
 | [`CHANGELOG.md`](./CHANGELOG.md) | Historial de versiones. |
 
