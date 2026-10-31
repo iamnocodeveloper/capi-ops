@@ -3,11 +3,21 @@ import { Bot, type Context, InlineKeyboard } from 'grammy';
 import { telegramCfg } from './config.js';
 import type { Db } from './db.js';
 import { esc, fmtBytes, fmtPct, pre, severityIcon, table } from './format.js';
+import { epAction, epCounts, epStateLabel, findEpService, type EpAction } from './easypanel.js';
 import { installWaha, findApp, nextWahaNumber } from './installer.js';
 import { isWaha } from './probe.js';
 import { appLogs, controlApp, deleteApp, deployApp } from './ops.js';
 import { checkWaha, listSessions } from './waha.js';
-import type { FleetCfg, PendingAction, ServerCfg, ServerSnapshot, Severity, WahaHealth } from './types.js';
+import type {
+  EasyPanelCfg,
+  EpSnapshot,
+  FleetCfg,
+  PendingAction,
+  ServerCfg,
+  ServerSnapshot,
+  Severity,
+  WahaHealth,
+} from './types.js';
 import type { StatsSummary } from './pg.js';
 
 export interface BotDeps {
@@ -29,6 +39,9 @@ export interface BotDeps {
     durationMs: number;
   }) => void;
   stats?: (days: number) => Promise<StatsSummary | null>;
+  ep?: () => EpSnapshot | null;
+  refreshEp?: () => Promise<EpSnapshot | null>;
+  easyPanel?: () => EasyPanelCfg | null;
   log: (line: string) => void;
 }
 
@@ -67,6 +80,25 @@ function resolveAlias(input: string, fleet: FleetCfg): string | null {
 const pending = new Map<string, PendingAction>();
 const PENDING_TTL = 5 * 60_000;
 
+async function currentEp(deps: BotDeps): Promise<EpSnapshot | null> {
+  if (deps.refreshEp) return deps.refreshEp();
+  return deps.ep?.() ?? null;
+}
+
+function epHostLine(ep: EpSnapshot): string {
+  if (!ep.reachable) return `sin respuesta — ${ep.lastError ?? 'error desconocido'}`;
+  const counts = epCounts(ep);
+  const uptime = ep.uptimeSeconds === null ? '–' : `${(ep.uptimeSeconds / 86_400).toFixed(1)} d`;
+  return [
+    `CPU ${fmtPct(ep.cpuPercent, 1)} · Mem ${fmtPct(ep.memPercent, 1)} · Disco ${fmtPct(ep.diskPercent, 1)}`,
+    `load1 ${ep.load1?.toFixed(2) ?? '–'} · ${ep.cores ?? '?'} cores · uptime ${uptime}`,
+    `servicios ${counts.up}/${ep.services.length} up${counts.down ? ` · ${counts.down} CAÍDOS` : ''}${counts.off ? ` · ${counts.off} off` : ''}`,
+    ep.updateAvailable
+      ? `actualización disponible${ep.updateVersion ? `: ${ep.updateVersion}` : ''}`
+      : 'sin actualizaciones pendientes',
+  ].join('\n');
+}
+
 export function createBot(deps: BotDeps): Bot {
   const bot = new Bot(telegramCfg.token);
 
@@ -91,7 +123,7 @@ export function createBot(deps: BotDeps): Bot {
   });
 
   bot.command('estado', async (ctx) => {
-    const snaps = await deps.refresh();
+    const [snaps, ep] = await Promise.all([deps.refresh(), currentEp(deps)]);
     const incidents = deps.db.openIncidents();
     const rows = snaps.map((s) => [
       s.alias,
@@ -108,8 +140,11 @@ export function createBot(deps: BotDeps): Bot {
           .map((i) => `${severityIcon(i.severity)} ${esc(i.title)}`)
           .join('\n')
       : 'sin incidentes abiertos';
+    const epBlock = ep
+      ? [`<b>${esc(ep.name)}</b> (${esc(ep.alias)} · ${esc(ep.ip)})`, pre(epHostLine(ep))]
+      : [];
     await ctx.reply(
-      [`<b>Estado de la flota</b>`, pre(body), `<b>Incidentes</b>\n${incidentLines}`].join('\n'),
+      [`<b>Estado de la flota</b>`, pre(body), ...epBlock, `<b>Incidentes</b>\n${incidentLines}`].join('\n'),
       { parse_mode: 'HTML' },
     );
   });
@@ -299,6 +334,117 @@ export function createBot(deps: BotDeps): Bot {
       parse_mode: 'HTML',
     });
   });
+
+  bot.command(['ep', 'easypanel'], async (ctx) => {
+    if (!deps.easyPanel?.()) {
+      await ctx.reply('EasyPanel no está configurado (faltan EASYPANEL_URL y EASYPANEL_TOKEN).');
+      return;
+    }
+    const ep = await currentEp(deps);
+    if (!ep) {
+      await ctx.reply('No pude leer el estado de EasyPanel.');
+      return;
+    }
+    const down = ep.services.filter((s) => s.state === 'down');
+    const lines = [`<b>${esc(ep.name)}</b> · ${esc(ep.url)}`, pre(epHostLine(ep))];
+    if (down.length) {
+      lines.push(
+        `<b>Caídos</b>\n` +
+          down
+            .map((s) => `• ${esc(s.project)}/${esc(s.name)}${s.host ? ` — ${esc(s.host)}` : ''}`)
+            .join('\n'),
+      );
+    } else {
+      lines.push('Sin servicios caídos 🎉');
+    }
+    await ctx.reply(lines.join('\n'), { parse_mode: 'HTML' });
+  });
+
+  bot.command(['eps', 'epservicios'], async (ctx) => {
+    if (!deps.easyPanel?.()) {
+      await ctx.reply('EasyPanel no está configurado (faltan EASYPANEL_URL y EASYPANEL_TOKEN).');
+      return;
+    }
+    const filter = (ctx.match ?? '').trim().toLowerCase();
+    const ep = await currentEp(deps);
+    if (!ep) {
+      await ctx.reply('No pude leer el estado de EasyPanel.');
+      return;
+    }
+    const services = filter
+      ? ep.services.filter((s) => `${s.project}/${s.name} ${s.host ?? ''}`.toLowerCase().includes(filter))
+      : ep.services;
+    if (!services.length) {
+      await ctx.reply(filter ? `Sin servicios que coincidan con "${filter}".` : 'Sin servicios.');
+      return;
+    }
+
+    const rows = services.map((s) => [
+      `${s.project}/${s.name}`.slice(0, 34),
+      epStateLabel(s),
+      s.cpuPercent === null ? '–' : `${s.cpuPercent.toFixed(1)}%`,
+      fmtBytes(s.memBytes),
+      s.httpStatus === null ? '–' : String(s.httpStatus),
+      s.host ?? '–',
+    ]);
+
+    const blocks: string[] = [];
+    for (let i = 0; i < rows.length; i += 25) {
+      blocks.push(
+        pre(table(rows.slice(i, i + 25), ['proyecto/servicio', 'estado', 'cpu', 'mem', 'http', 'dominio'])),
+      );
+    }
+
+    let buffer = `<b>EasyPanel · servicios</b> (${services.length})`;
+    for (const block of blocks) {
+      if ((buffer + '\n' + block).length > 3900) {
+        await ctx.reply(buffer.trim(), { parse_mode: 'HTML' });
+        buffer = block;
+      } else {
+        buffer = buffer ? `${buffer}\n${block}` : block;
+      }
+    }
+    if (buffer.trim()) await ctx.reply(buffer.trim(), { parse_mode: 'HTML' });
+  });
+
+  bot.command(['epserv', 'epservicio'], async (ctx) => {
+    if (!deps.easyPanel?.()) {
+      await ctx.reply('EasyPanel no está configurado (faltan EASYPANEL_URL y EASYPANEL_TOKEN).');
+      return;
+    }
+    const arg = (ctx.match ?? '').trim();
+    if (!arg) {
+      await ctx.reply('Uso: /epserv <cliente/servicio|servicio>  — ej: /epserv clientes/feroz-landing');
+      return;
+    }
+    const ep = await currentEp(deps);
+    const service = ep ? findEpService(ep, arg) : null;
+    if (!ep || !service) {
+      await ctx.reply(`No encontré "${esc(arg)}". Probá /eps.`, { parse_mode: 'HTML' });
+      return;
+    }
+    const detail = [
+      `tipo: ${service.type}`,
+      `estado: ${epStateLabel(service)} (${service.actual}/${service.desired} contenedores)`,
+      `cliente/proyecto: ${service.project}`,
+      `habilitado: ${service.enabled ? 'si' : 'no'}`,
+      service.url ? `url: ${service.url}` : 'url: sin dominio',
+      service.httpStatus === null ? '' : `http: ${service.httpStatus} en ${service.httpMs} ms`,
+      `cpu: ${service.cpuPercent === null ? '–' : `${service.cpuPercent.toFixed(1)}%`}`,
+      `mem: ${fmtBytes(service.memBytes)}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+    await ctx.reply(
+      [`<b>${esc(service.project)}/${esc(service.name)}</b>`, pre(detail)].join('\n'),
+      { parse_mode: 'HTML' },
+    );
+  });
+
+  bot.command('epdeploy', async (ctx) => suggestEpWrite(ctx, deps, 'deploy', (ctx.match ?? '').trim()));
+  bot.command('eprestart', async (ctx) => suggestEpWrite(ctx, deps, 'restart', (ctx.match ?? '').trim()));
+  bot.command('epstop', async (ctx) => suggestEpWrite(ctx, deps, 'stop', (ctx.match ?? '').trim()));
+  bot.command('epstart', async (ctx) => suggestEpWrite(ctx, deps, 'start', (ctx.match ?? '').trim()));
 
   bot.command(['stats', 'estadisticas'], async (ctx) => {
     const arg = (ctx.match ?? '').trim();
@@ -581,7 +727,99 @@ async function suggestWrite(
   );
 }
 
+async function suggestEpWrite(
+  ctx: Context,
+  deps: BotDeps,
+  epActionName: EpAction,
+  target: string,
+): Promise<void> {
+  if (deps.readOnly()) {
+    await ctx.reply('Modo solo-lectura activo.');
+    return;
+  }
+  if (!deps.easyPanel?.()) {
+    await ctx.reply('EasyPanel no está configurado (faltan EASYPANEL_URL y EASYPANEL_TOKEN).');
+    return;
+  }
+  if (!target) {
+    await ctx.reply(`Uso: /ep${epActionName} <cliente/servicio|servicio>`);
+    return;
+  }
+  const ep = await currentEp(deps);
+  const service = ep ? findEpService(ep, target) : null;
+  if (!service) {
+    await ctx.reply(`No encontré "${esc(target)}". Probá /eps.`, { parse_mode: 'HTML' });
+    return;
+  }
+  const id = randomUUID().slice(0, 8);
+  const command = `ep${epActionName}`;
+  const action: PendingAction = {
+    id,
+    chatId: ctx.chat?.id ?? 0,
+    userId: ctx.from?.id ?? 0,
+    command,
+    args: {
+      project: service.project,
+      service: service.name,
+      type: service.type,
+      name: `${service.project}/${service.name}`,
+    },
+    description: `${epActionName} ${service.project}/${service.name}`,
+    createdAt: Date.now(),
+    stage: 'confirm',
+  };
+  pending.set(id, action);
+  const kb = new InlineKeyboard()
+    .text('✅ Confirmar', `ok:${id}`)
+    .text('✖️ Cancelar', `no:${id}`);
+  await ctx.reply(
+    `<b>${epActionName}</b> sobre <b>${esc(service.project)}/${esc(service.name)}</b> (${esc(epStateLabel(service))})\n${service.url ? `${esc(service.url)}\n` : ''}tipo ${esc(service.type)}`,
+    { parse_mode: 'HTML', reply_markup: kb },
+  );
+}
+
 async function runAction(ctx: Context, deps: BotDeps, action: PendingAction): Promise<void> {
+  if (action.command.startsWith('ep')) {
+    const cfg = deps.easyPanel?.();
+    const started = Date.now();
+    try {
+      if (!cfg) throw new Error('EasyPanel no está configurado');
+      const result = await epAction(
+        cfg,
+        {
+          project: String(action.args['project'] ?? ''),
+          service: String(action.args['service'] ?? ''),
+          type: String(action.args['type'] ?? ''),
+        },
+        action.command.slice(2) as EpAction,
+      );
+      audit(deps, {
+        chatId: action.chatId,
+        userId: action.userId,
+        command: action.command,
+        args: action.args,
+        result,
+        ok: true,
+        durationMs: Date.now() - started,
+      });
+      await ctx.reply(`✅ ${result}`);
+      void deps.refreshEp?.();
+    } catch (err) {
+      const message = (err as Error).message;
+      audit(deps, {
+        chatId: action.chatId,
+        userId: action.userId,
+        command: action.command,
+        args: action.args,
+        result: message,
+        ok: false,
+        durationMs: Date.now() - started,
+      });
+      await ctx.reply(`❌ ${action.command} falló: ${message}`);
+    }
+    return;
+  }
+
   const alias = String(action.args['alias'] ?? '');
   const appUuid = String(action.args['uuid'] ?? '');
   const server: ServerCfg | undefined = deps.fleet.servers.find((s) => s.alias === alias);
@@ -639,9 +877,15 @@ function helpText(deps: BotDeps): string {
     '/stats [días] — uptime, disponibilidad y alertas del histórico',
     '/auditoria — últimas acciones',
     '',
+    '<b>EasyPanel</b>',
+    '/ep — host, servicios caídos y actualización pendiente',
+    '/eps [texto] — servicios con estado, CPU, HTTP y dominio',
+    '/epserv &lt;cliente/servicio&gt; — detalle de un servicio',
+    '',
     '<b>Acciones</b>',
     '/instalar waha [cantidad] [servidor]',
     '/deploy | /restart | /stop | /delete &lt;wahaNN|uuid&gt;',
+    '/epdeploy | /eprestart | /epstop | /epstart &lt;cliente/servicio&gt;',
     '/modo solo-lectura | /modo normal',
     '',
     `Modo actual: <b>${deps.readOnly() ? 'solo-lectura' : 'normal'}</b>`,

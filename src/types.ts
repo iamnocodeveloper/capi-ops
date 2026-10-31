@@ -74,6 +74,59 @@ export interface ServerSnapshot {
   collectedAt: number;
 }
 
+export interface EasyPanelCfg {
+  alias: string;
+  name: string;
+  url: string;
+  token: string;
+  ip: string;
+  httpProbe: boolean;
+}
+
+export type EpServiceState = 'up' | 'down' | 'off' | 'unknown';
+
+export interface EpService {
+  project: string;
+  name: string;
+  key: string;
+  type: string;
+  host: string | null;
+  url: string | null;
+  enabled: boolean;
+  desired: number;
+  actual: number;
+  state: EpServiceState;
+  cpuPercent: number | null;
+  memBytes: number | null;
+  httpOk: boolean | null;
+  httpStatus: number | null;
+  httpMs: number | null;
+  httpError: string | null;
+}
+
+export interface EpSnapshot {
+  alias: string;
+  name: string;
+  url: string;
+  ip: string;
+  reachable: boolean;
+  cpuPercent: number | null;
+  memUsedBytes: number | null;
+  memTotalBytes: number | null;
+  memPercent: number | null;
+  diskPercent: number | null;
+  diskUsedGb: number | null;
+  diskTotalGb: number | null;
+  load1: number | null;
+  cores: number | null;
+  uptimeSeconds: number | null;
+  updateAvailable: boolean;
+  updateVersion: string | null;
+  services: EpService[];
+  lastError: string | null;
+  collectedAt: number;
+}
+
 export interface PendingAction {
   id: string;
   chatId: number;

@@ -1,13 +1,14 @@
-import { env, loadFleet, paths, telegramCfg, thresholds, wahaApiKey } from './config.js';
+import { env, easyPanelCfg, loadFleet, paths, telegramCfg, thresholds, wahaApiKey } from './config.js';
 import { Db } from './db.js';
+import { epAsServerSnapshot, probeEasyPanel } from './easypanel.js';
 import { AlertEngine, parseQuietHours } from './incidents.js';
 import { createBot } from './bot.js';
 import { startHttp } from './http.js';
 import { isWaha, probeServer } from './probe.js';
-import { evaluate, type Finding } from './rules.js';
+import { evaluate, evaluateEasyPanel, type Finding } from './rules.js';
 import { TelegramNotifier } from './telegram.js';
 import { checkWaha, mapLimit } from './waha.js';
-import type { FleetCfg, ServerSnapshot, WahaHealth } from './types.js';
+import type { EpSnapshot, FleetCfg, ServerSnapshot, WahaHealth } from './types.js';
 import { refreshInventory } from './installer.js';
 import {
   initAnalytics,
@@ -31,6 +32,8 @@ function log(line: string, level: keyof typeof levels = 'info'): void {
 }
 
 const fleet: FleetCfg = loadFleet();
+const epCfg = easyPanelCfg();
+let epSnapshot: EpSnapshot | null = null;
 const db = new Db(paths.db);
 const notifier = new TelegramNotifier((l) => log(l, 'warn'));
 const quiet = parseQuietHours(env.QUIET_HOURS);
@@ -103,6 +106,15 @@ async function refresh(force = false): Promise<ServerSnapshot[]> {
   return snapshots;
 }
 
+async function refreshEp(): Promise<EpSnapshot | null> {
+  if (!epCfg) return null;
+  epSnapshot = await probeEasyPanel(epCfg, { log: (line) => log(line, 'debug') });
+  if (!epSnapshot.reachable) {
+    log(`easypanel sin respuesta: ${epSnapshot.lastError ?? 'error desconocido'}`, 'warn');
+  }
+  return epSnapshot;
+}
+
 async function probeWahaFleet(force = false): Promise<void> {
   if (!force && Date.now() - wahaProbedAt < env.WAHA_PROBE_SECONDS * 1000) return;
   let key = '';
@@ -142,6 +154,7 @@ async function cycle(): Promise<void> {
   const started = Date.now();
   try {
     const snaps = await refresh(true);
+    const ep = await refreshEp();
     await probeWahaFleet(false);
     recordSamples(snaps);
 
@@ -154,6 +167,16 @@ async function cycle(): Promise<void> {
           load1: snap.metrics.load1,
         });
       }
+    }
+
+    if (ep) {
+      db.addMetric(ep.alias, {
+        cpu: ep.cpuPercent,
+        memPercent: ep.memPercent,
+        diskPercent: ep.diskPercent,
+        load1: ep.load1,
+      });
+      recordSamples([epAsServerSnapshot(ep)]);
     }
 
     const findings: Finding[] = [];
@@ -169,6 +192,7 @@ async function cycle(): Promise<void> {
       baseline: (alias: string, column: 'cpu' | 'mem_percent' | 'load1') => db.baseline(alias, column),
     };
     for (const snap of snaps) findings.push(...evaluate(snap, ctxBase));
+    if (ep) findings.push(...evaluateEasyPanel(ep, ctxBase.thresholds, thresholds.epServiceCpu));
 
     await engine.reconcile(findings);
     lastCycleAt = Date.now();
@@ -213,9 +237,26 @@ async function maybeDigest(): Promise<void> {
     ].join(' · '),
   );
   const incidents = db.openIncidents();
+  const epLines = epSnapshot
+    ? [
+        '',
+        `<b>${epSnapshot.name}</b>`,
+        [
+          epSnapshot.reachable ? 'ok' : 'CAÍDO',
+          `CPU ${epSnapshot.cpuPercent?.toFixed(0) ?? '–'}%`,
+          `Mem ${epSnapshot.memPercent?.toFixed(0) ?? '–'}%`,
+          `Disco ${epSnapshot.diskPercent?.toFixed(0) ?? '–'}%`,
+          `${epSnapshot.services.filter((s) => s.state === 'up').length}/${epSnapshot.services.length} servicios up`,
+        ].join(' · '),
+        epSnapshot.updateAvailable
+          ? `Actualización disponible${epSnapshot.updateVersion ? `: ${epSnapshot.updateVersion}` : ''}`
+          : '',
+      ].filter(Boolean)
+    : [];
   const text = [
     '📊 <b>Digest diario</b>',
     '<pre>' + rows.join('\n') + '</pre>',
+    ...epLines,
     incidents.length
       ? `<b>${incidents.length} incidentes abiertos</b>\n` + incidents.slice(0, 5).map((i) => `• ${i.title}`).join('\n')
       : 'Sin incidentes abiertos 🎉',
@@ -238,6 +279,9 @@ const bot = telegramCfg.enabled
       wahaHealth: () => wahaHealth,
       recordAction,
       stats: (days: number) => loadStats(days),
+      ep: () => epSnapshot,
+      refreshEp,
+      easyPanel: () => epCfg,
       log: (l) => log(l, 'warn'),
     })
   : null;
@@ -255,6 +299,9 @@ const http = startHttp({
   wahaHealth: () => wahaHealth,
   recordAction,
   stats: (days: number) => loadStats(days),
+  ep: () => epSnapshot,
+  refreshEp,
+  easyPanel: () => epCfg,
   log,
   startedAt,
   lastCycleAt: () => lastCycleAt,
@@ -262,7 +309,7 @@ const http = startHttp({
 });
 
 async function main(): Promise<void> {
-  log(`capi-ops arrancando · ${fleet.servers.length} servidores · telegram ${telegramCfg.enabled ? 'on' : 'off'} · solo-lectura ${readOnly}`);
+  log(`capi-ops arrancando · ${fleet.servers.length} servidores · telegram ${telegramCfg.enabled ? 'on' : 'off'} · solo-lectura ${readOnly}${epCfg ? ' · easypanel on' : ''}`);
   await initAnalytics((line, level) => log(line, level ?? 'info'));
   await cycle();
 

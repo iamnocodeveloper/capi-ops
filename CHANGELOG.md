@@ -3,6 +3,22 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 Versionado semántico.
 
+## [0.6.0] — 2026-10-31
+
+### Agregado
+- **Monitoreo del propio EasyPanel** (`EASYPANEL_URL` + `EASYPANEL_TOKEN`), sin Prometheus ni agentes:
+  CPU, memoria, disco, load y uptime del host vía `getLegacyMonitorSystemStats`.
+- Servicios: contenedores `actual/desired` (`getDockerTaskStats`), CPU y memoria por servicio
+  (`getMonitorTableData`), estado `up`/`caído`/`off`.
+- Caídas HTTP por dominio (`listDomains` + chequeo real): un 5xx o timeout abre incidente; 401/403/404
+  cuentan como vivo.
+- Aviso de actualización de EasyPanel (`getUpdateStatus`) con la versión disponible.
+- Comandos nuevos en el mismo bot: `/ep`, `/eps`, `/epserv`, `/epdeploy`, `/eprestart`, `/epstop`,
+  `/epstart` (estas cuatro con confirmación y auditoría).
+- `/estado`, el digest diario, `/health` y `/metrics` incluyen el panel; las muestras del host se
+  escriben en el histórico con el alias configurado.
+- Alertas etiquetadas por origen: `EasyPanel · cliente/servicio`, separadas de la flota Coolify.
+
 ## [0.5.0] — 2026-10-29
 
 ### Agregado

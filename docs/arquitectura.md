@@ -47,6 +47,7 @@ cada POLL_SECONDS (60 s)
 | `mcp.ts` | Cliente JSON-RPC (initialize + tools/call) | Cachea la sesión por servidor y la reinicia si falla |
 | `probe.ts` | Normaliza la respuesta de cada tool a `ServerSnapshot` | Tolera shapes distintos entre versiones |
 | `waha.ts` | DNS + `/api/version` + `/api/sessions` | Cache 60 s, watchdog de 12 s y concurrencia limitada |
+| `easypanel.ts` | Cliente REST del panel propio y normalización a `EpSnapshot` | Host, servicios, dominios y updates sin Prometheus |
 | `rules.ts` | Funciones puras: snapshot → hallazgos | Sin estado, fácil de testear |
 | `incidents.ts` | Máquina de estados y política de notificación | Horario silencioso y cooldown viven acá |
 | `installer.ts` | Numeración global, elección de servidor, deploy, verificación | Replica el procedimiento manual de la flota |
@@ -68,8 +69,8 @@ actions(id, ts, chat_id, user_id, command, args_json,
 settings(key, value)                                         -- last_waha_number, last_digest
 ```
 
-`incidents.key` es estable (`srv:capi4:waha-dns`, `srv:capi1:cpu`) y es lo que permite deduplicar:
-mientras el hallazgo siga apareciendo, el incidente sigue abierto.
+`incidents.key` es estable (`srv:capi4:waha-dns`, `srv:capi1:cpu`, `ep:ep:svc:clientes_feroz-landing:down`)
+y es lo que permite deduplicar: mientras el hallazgo siga apareciendo, el incidente sigue abierto.
 
 ## Anomalías
 

@@ -49,6 +49,7 @@ Node 24 · TypeScript · SQLite · MCP · bot de Telegram · sin base de datos e
 |---|---|
 | **Recursos** | CPU, memoria, disco y load por servidor, con umbral configurable y detección de anomalías contra la línea base de la misma franja horaria. |
 | **Contenedores** | Aplicaciones que dejaron de estar `running`, bucles de reinicio y cola de despliegues trabada. |
+| **EasyPanel** | El panel donde corre el propio servicio: CPU, memoria, disco, load y uptime del host; servicios caídos (contenedores actuales vs. deseados); HTTP de cada dominio; y actualización de EasyPanel pendiente. Sin instalar Prometheus. |
 | **Instancias** | Health real de cada instancia WAHA por HTTPS (`/api/version`): distingue entre contenedor caído, aplicación sin responder y dominio mal apuntado. |
 | **DNS** | Si el dominio de una instancia no resuelve a la IP del servidor, lo dice con nombre y apellido. |
 | **Ciclo de vida** | Cada incidente se abre una vez, se re-notifica con cooldown, se cierra con un mensaje de recuperación y se resume en un digest diario. |
@@ -69,6 +70,8 @@ por servidor cuando falla más de una instancia y horario silencioso que solo de
 | `/waha <instancia\|uuid>` | Estado de una instancia, sesiones de WhatsApp y DNS |
 | `/buscar <texto>` | Busca aplicaciones y dominios en toda la flota |
 | `/logs <instancia> [n]` | Últimas líneas de un contenedor |
+| `/ep` · `/eps` · `/epserv` | Host EasyPanel, servicios con estado/CPU/HTTP/dominio y detalle de uno |
+| `/epdeploy` · `/eprestart` · `/epstop` · `/epstart` | Acciones sobre un servicio de EasyPanel, con botón de confirmación |
 | `/incidentes` · `/auditoria` | Incidentes abiertos · últimas acciones ejecutadas |
 | `/instalar waha [n] [srv]` | Crea instancias, elige el servidor con capacidad y reporta dónde quedaron |
 | `/deploy` · `/restart` · `/stop` · `/delete` | Acciones con botón de confirmación; `delete` pide tipear `CONFIRMAR <instancia>` |
@@ -203,6 +206,26 @@ npm run dev        # sin TG_TOKEN corre en modo consola
 3. Cargá `TG_TOKEN`, `TG_ALLOWED_CHATS` y `TG_ALLOWED_USERS`. Cualquier otro chat se ignora y se
    registra en el log.
 
+### Vigilar el propio EasyPanel
+
+El watcher puede mirar el panel donde él mismo corre, sin Prometheus ni agentes:
+
+1. En EasyPanel → **Settings → API tokens**, generá un token (o `POST /api/users/generateApiToken`).
+2. Cargá `EASYPANEL_URL=https://<tu-panel>` y `EASYPANEL_TOKEN=<token>`.
+3. Redeploy. En el siguiente ciclo aparecen `/ep`, `/eps` y `/epserv`.
+
+Qué agrega:
+
+- **Host:** CPU, memoria, disco (GB usados/totales), load y uptime.
+- **Servicios:** contenedores `actual/desired` (detecta caídos), CPU y memoria por servicio.
+- **Dominios:** HTTP real de cada `host` configurado; un 5xx o un timeout es incidente, 401/403/404
+  cuentan como vivo.
+- **Update:** `getUpdateStatus` de EasyPanel, con el número de versión cuando está disponible.
+- Las alertas llegan con el prefijo `EasyPanel · cliente/servicio`, así se distinguen de la flota Coolify.
+
+> Si el servidor entero se cae, este watcher también: configurá `HEARTBEAT_URL` (healthchecks.io) para
+> el aviso de "muerto" desde afuera.
+
 ---
 
 ## 📦 Despliegue
@@ -243,6 +266,10 @@ docker run -d --name capi-ops -p 8080:8080 \
 | Variable | Para qué | Default |
 |---|---|---|
 | `TG_TOKEN` | Token de BotFather | — |
+| `EASYPANEL_URL` · `EASYPANEL_TOKEN` | Panel propio a vigilar por su API REST. Vacío = apagado | — |
+| `EASYPANEL_ALIAS` · `EASYPANEL_NAME` · `EASYPANEL_IP` | Etiqueta del panel en alertas y comandos | `ep` / `EasyPanel` / host de la URL |
+| `EASYPANEL_HTTP` | Chequear cada dominio por HTTP para detectar caídas | `true` |
+| `EP_SERVICE_CPU` | Umbral de CPU por servicio (%) | `90` |
 | `TG_ALLOWED_CHATS` · `TG_ALLOWED_USERS` | Allowlist dura de chat y usuario | vacío |
 | `TG_ADMIN_CHAT` | Chat para auditoría de acciones destructivas | primer chat |
 | `CAPIx_TOKEN` | Token MCP de cada panel (referenciado desde la flota) | — |
@@ -316,6 +343,7 @@ src/
   mcp.ts        cliente JSON-RPC sobre Streamable HTTP
   probe.ts      recolección por servidor y normalización
   waha.ts       health de instancias (HTTP, DNS, sesiones)
+  easypanel.ts  API REST de EasyPanel → host, servicios, dominios y updates
   rules.ts      umbrales y anomalías → hallazgos
   incidents.ts  máquina de estados y política de notificación
   installer.ts  numeración, elección de servidor, deploy y verificación

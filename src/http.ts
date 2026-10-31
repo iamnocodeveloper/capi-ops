@@ -18,6 +18,7 @@ export function startHttp(deps: HttpDeps): { close: () => void } {
     try {
       const url = new URL(req.url ?? '/', `http://localhost:${env.HTTP_PORT}`);
       if (req.method === 'GET' && url.pathname === '/health') {
+        const ep = deps.ep?.() ?? null;
         return json(res, 200, {
           ok: true,
           uptimeSeconds: Math.round((Date.now() - deps.startedAt) / 1000),
@@ -33,6 +34,21 @@ export function startHttp(deps: HttpDeps): { close: () => void } {
             mem: s.metrics.memPercent,
             disk: s.metrics.diskPercent,
           })),
+          easyPanel: ep
+            ? {
+                alias: ep.alias,
+                url: ep.url,
+                ip: ep.ip,
+                reachable: ep.reachable,
+                cpu: ep.cpuPercent,
+                mem: ep.memPercent,
+                disk: ep.diskPercent,
+                services: ep.services.length,
+                down: ep.services.filter((s) => s.state === 'down').length,
+                updateAvailable: ep.updateAvailable,
+                updateVersion: ep.updateVersion,
+              }
+            : null,
           openIncidents: deps.db.openIncidents().length,
         });
       }
@@ -46,6 +62,22 @@ export function startHttp(deps: HttpDeps): { close: () => void } {
           if (s.metrics.cpuPercent !== null) lines.push(`capi_cpu_percent${labels} ${s.metrics.cpuPercent.toFixed(2)}`);
           if (s.metrics.memPercent !== null) lines.push(`capi_mem_percent${labels} ${s.metrics.memPercent.toFixed(2)}`);
           if (s.metrics.diskPercent !== null) lines.push(`capi_disk_percent${labels} ${s.metrics.diskPercent.toFixed(2)}`);
+        }
+        const ep = deps.ep?.() ?? null;
+        if (ep) {
+          const host = `{alias="${ep.alias}"}`;
+          lines.push(`capi_easypanel_up${host} ${ep.reachable ? 1 : 0}`);
+          if (ep.cpuPercent !== null) lines.push(`capi_easypanel_cpu_percent${host} ${ep.cpuPercent.toFixed(2)}`);
+          if (ep.memPercent !== null) lines.push(`capi_easypanel_mem_percent${host} ${ep.memPercent.toFixed(2)}`);
+          if (ep.diskPercent !== null) lines.push(`capi_easypanel_disk_percent${host} ${ep.diskPercent.toFixed(2)}`);
+          lines.push(`capi_easypanel_update_available${host} ${ep.updateAvailable ? 1 : 0}`);
+          for (const svc of ep.services) {
+            const labels = `{alias="${ep.alias}",project="${svc.project}",service="${svc.name}"}`;
+            lines.push(`capi_easypanel_service_up${labels} ${svc.state === 'up' ? 1 : 0}`);
+            lines.push(`capi_easypanel_service_desired${labels} ${svc.desired}`);
+            lines.push(`capi_easypanel_service_actual${labels} ${svc.actual}`);
+            if (svc.httpOk !== null) lines.push(`capi_easypanel_service_http_ok${labels} ${svc.httpOk ? 1 : 0}`);
+          }
         }
         lines.push(`capi_open_incidents ${deps.db.openIncidents().length}`);
         res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4' });

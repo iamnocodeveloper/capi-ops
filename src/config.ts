@@ -1,7 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { z } from 'zod';
-import type { FleetCfg, ServerCfg } from './types.js';
+import type { EasyPanelCfg, FleetCfg, ServerCfg } from './types.js';
 
 function loadDotEnv(path: string): void {
   if (!existsSync(path)) return;
@@ -45,6 +45,13 @@ const EnvSchema = z.object({
   TG_ALLOWED_USERS: z.string().optional().default(''),
   TG_ADMIN_CHAT: z.string().optional().default(''),
   WAHA_API_KEY: z.string().optional().default(''),
+  EASYPANEL_URL: z.string().optional().default(''),
+  EASYPANEL_TOKEN: z.string().optional().default(''),
+  EASYPANEL_ALIAS: z.string().optional().default('ep'),
+  EASYPANEL_NAME: z.string().optional().default('EasyPanel'),
+  EASYPANEL_IP: z.string().optional().default(''),
+  EASYPANEL_HTTP: bool(true),
+  EP_SERVICE_CPU: num(90),
   OPS_READ_ONLY: bool(false),
   POLL_SECONDS: num(60),
   WAHA_PROBE_SECONDS: num(300),
@@ -142,6 +149,32 @@ export function wahaApiKey(): string {
   return key;
 }
 
+/**
+ * EasyPanel self-hosting opcional. Se activa solo si están `EASYPANEL_URL` y `EASYPANEL_TOKEN`;
+ * sin ellos el resto del watcher funciona igual.
+ */
+export function easyPanelCfg(): EasyPanelCfg | null {
+  const url = env.EASYPANEL_URL.trim().replace(/\/+$/, '');
+  const token = env.EASYPANEL_TOKEN.trim();
+  if (!url || !token) return null;
+  let host = env.EASYPANEL_IP.trim();
+  if (!host) {
+    try {
+      host = new URL(url).hostname;
+    } catch {
+      throw new Error(`EASYPANEL_URL no es una URL válida: ${url}`);
+    }
+  }
+  return {
+    alias: env.EASYPANEL_ALIAS || 'ep',
+    name: env.EASYPANEL_NAME || 'EasyPanel',
+    url,
+    token,
+    ip: host,
+    httpProbe: env.EASYPANEL_HTTP,
+  };
+}
+
 export const paths = {
   data: resolve(process.cwd(), env.DATA_DIR),
   db: resolve(process.cwd(), env.DATA_DIR, 'state.sqlite'),
@@ -160,5 +193,6 @@ export const thresholds = {
   mem: env.TH_MEM,
   diskWarn: env.TH_DISK_WARN,
   diskCrit: env.TH_DISK_CRIT,
+  epServiceCpu: env.EP_SERVICE_CPU,
   renotifyMs: env.RENOTIFY_MINUTES * 60_000,
 };
