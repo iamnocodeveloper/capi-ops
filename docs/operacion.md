@@ -159,6 +159,18 @@ crear uno nuevo y actualizar todo:
 
 ## Alta de un servidor nuevo
 
+### Desde el bot (recomendado)
+
+- **VPS virgen:** `/servidor nuevo <ip> [alias]`. El bot pide el usuario SSH y el método (llave o
+  contraseña), instala Coolify por SSH, te pasa el enlace de registro y, tras `/servidor listo`,
+  hace el onboarding (habilita MCP/API, acuña el token, descubre los UUID) y lo registra en la flota.
+- **Coolify ya instalado:** `/servidor agregar <alias> <ip> <token>`.
+- Los servidores así dados de alta viven en SQLite (`fleet_servers`), no en `SERVERS_JSON`. El
+  `wahaRange` se calcula solo y el token queda guardado en `data/state.sqlite` (nunca se loguea).
+- Para sacarlos: `/servidor quitar <alias>`.
+
+### Manual (por variables)
+
 1. Registrar el MCP del Coolify en Command Code con bearer token.
 2. Agregar la entrada a `SERVERS_JSON`: URL del MCP, `tokenEnv`, IP, `projectUuid`, `serverUuid`,
    `destinationUuid` y `wahaRange`.

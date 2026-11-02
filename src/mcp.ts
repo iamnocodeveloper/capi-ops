@@ -137,3 +137,8 @@ export function clientFor(server: ServerCfg): McpClient {
   registry.set(server.alias, client);
   return client;
 }
+
+/** Olvida el cliente cacheado de un alias (al quitarlo o al cambiar su token/URL). */
+export function forgetClient(alias: string): void {
+  registry.delete(alias);
+}

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { Bot, type Context, InlineKeyboard } from 'grammy';
 import { telegramCfg } from './config.js';
 import type { Db } from './db.js';
@@ -8,6 +9,19 @@ import { installWaha, findApp, nextWahaNumber } from './installer.js';
 import { isWaha } from './probe.js';
 import { appLogs, controlApp, deleteApp, deployApp } from './ops.js';
 import { checkWaha, listSessions } from './waha.js';
+import {
+  buildFleetEntry,
+  defaultAlias,
+  discoverCoolify,
+  formatInstallerProgress,
+  installCoolify,
+  isCoolifyToken,
+  isIpv4,
+  nextWahaRange,
+  onboardCoolify,
+  parseInstallerLog,
+  type SshTarget,
+} from './provision.js';
 import type {
   EasyPanelCfg,
   EpSnapshot,
@@ -16,6 +30,7 @@ import type {
   ServerCfg,
   ServerSnapshot,
   Severity,
+  StoredFleetServer,
   WahaHealth,
 } from './types.js';
 import type { StatsSummary } from './pg.js';
@@ -42,7 +57,35 @@ export interface BotDeps {
   ep?: () => EpSnapshot | null;
   refreshEp?: () => Promise<EpSnapshot | null>;
   easyPanel?: () => EasyPanelCfg | null;
+  // Alta de servidores desde el bot
+  provisionCfg: () => ProvisionRuntime;
+  addServer: (server: ServerCfg, addedBy: number) => void;
+  removeServer: (alias: string) => boolean;
+  hotServers: () => StoredFleetServer[];
   log: (line: string) => void;
+}
+
+/** Parámetros de SSH/config del alta, resueltos desde el entorno. */
+export interface ProvisionRuntime {
+  user: string;
+  sshPort: number;
+  keyPath: string;
+  timeoutMs: number;
+  projectName: string;
+}
+
+/** Asistente por chat para dar de alta un VPS virgen. */
+interface ProvisionWizard {
+  chatId: number;
+  userId: number;
+  step: 'ssh-user' | 'password' | 'confirm' | 'await-register';
+  ip: string;
+  alias: string;
+  user: string;
+  auth: 'key' | 'password';
+  /** Solo en memoria: nunca se persiste ni se loguea. */
+  password?: string;
+  createdAt: number;
 }
 
 interface AuditEntry {
@@ -79,6 +122,10 @@ function resolveAlias(input: string, fleet: FleetCfg): string | null {
 
 const pending = new Map<string, PendingAction>();
 const PENDING_TTL = 5 * 60_000;
+
+/** Asistentes de alta en curso, por chat. Las contraseñas viven solo acá (memoria). */
+const wizards = new Map<number, ProvisionWizard>();
+const WIZARD_TTL = 15 * 60_000;
 
 async function currentEp(deps: BotDeps): Promise<EpSnapshot | null> {
   if (deps.refreshEp) return deps.refreshEp();
@@ -532,7 +579,15 @@ export function createBot(deps: BotDeps): Bot {
       a.command,
       a.ok ? 'ok' : 'error',
     ]);
-    await ctx.reply(pre(table(rows, ['hora', 'user', 'comando', 'res'])), { parse_mode: 'HTML' });
+    const hot = deps.hotServers();
+    const lines = [pre(table(rows, ['hora', 'user', 'comando', 'res']))];
+    if (hot.length) {
+      lines.push(
+        `<b>Servidores en caliente</b> (${hot.length}): ${hot.map((s) => esc(s.alias)).join(', ')}`,
+        '⚠️ Guardan su token de equipo en la base local (data/state.sqlite); nunca se escribe en los logs.',
+      );
+    }
+    await ctx.reply(lines.join('\n'), { parse_mode: 'HTML' });
   });
 
   bot.command('modo', async (ctx) => {
@@ -627,6 +682,32 @@ export function createBot(deps: BotDeps): Bot {
     }
   });
 
+  // ── Alta de servidores ───────────────────────────────────────
+  bot.command('servidor', async (ctx) => {
+    const parts = (ctx.match ?? '').trim().split(/\s+/).filter(Boolean);
+    const sub = (parts[0] ?? '').toLowerCase();
+    if (sub === 'nuevo') return startServerWizard(ctx, deps, parts.slice(1));
+    if (sub === 'agregar') return addExistingServer(ctx, deps, parts.slice(1));
+    if (sub === 'quitar') return removeServerAction(ctx, deps, parts.slice(1));
+    if (sub === 'listo') return finishOnboarding(ctx, deps);
+    if (sub === 'cancelar') {
+      if (wizards.delete(ctx.chat.id)) await ctx.reply('Asistente cancelado.');
+      else await ctx.reply('No había un asistente en curso.');
+      return;
+    }
+    await ctx.reply(
+      [
+        '<b>Alta de servidores</b>',
+        '/servidor nuevo &lt;ip&gt; [alias] — instala Coolify en un VPS virgen',
+        '/servidor agregar &lt;alias&gt; &lt;ip&gt; &lt;token&gt; — da de alta un Coolify existente',
+        '/servidor quitar &lt;alias&gt; — saca un servidor de la flota',
+        '/servidor listo — continúa el alta tras crear la cuenta raíz',
+        '/servidor cancelar — aborta el asistente',
+      ].join('\n'),
+      { parse_mode: 'HTML' },
+    );
+  });
+
   bot.command('deploy', async (ctx) => suggestWrite(ctx, deps, 'deploy', (ctx.match ?? '').trim()));
   bot.command('restart', async (ctx) => suggestWrite(ctx, deps, 'restart', (ctx.match ?? '').trim()));
   bot.command('stop', async (ctx) => suggestWrite(ctx, deps, 'stop', (ctx.match ?? '').trim()));
@@ -659,7 +740,147 @@ export function createBot(deps: BotDeps): Bot {
     await runAction(ctx, deps, action);
   });
 
+  // Asistente de alta: elección de autenticación, confirmación y cancelación.
+  bot.callbackQuery(/^wiz:auth:(key|pass):(\d+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const chatId = Number(ctx.match?.[2]);
+    if (ctx.chat?.id !== chatId) {
+      await ctx.editMessageText('No es tu asistente.');
+      return;
+    }
+    const wiz = wizards.get(chatId);
+    if (!wiz) {
+      await ctx.editMessageText('El asistente expiró. Empezá de nuevo con /servidor nuevo.');
+      return;
+    }
+    wiz.auth = ctx.match?.[1] === 'pass' ? 'password' : 'key';
+    if (wiz.auth === 'password') {
+      wiz.step = 'password';
+      wizards.set(chatId, wiz);
+      await ctx.editMessageText(
+        `Mandá la contraseña SSH de ${wiz.user}@${wiz.ip} en el próximo mensaje.\n` +
+          'No la guardo en disco ni en los logs (borro el mensaje en cuanto la recibo).',
+      );
+      return;
+    }
+    const cfg = deps.provisionCfg();
+    if (!cfg.keyPath) {
+      await ctx.editMessageText('No hay llave configurada (falta PROVISION_SSH_KEY_PATH). Elegí contraseña.');
+      return;
+    }
+    wiz.step = 'confirm';
+    wizards.set(chatId, wiz);
+    await ctx.editMessageText(confirmSummary(wiz), {
+      parse_mode: 'HTML',
+      reply_markup: new InlineKeyboard()
+        .text('✅ Instalar Coolify', `wiz:go:${chatId}`)
+        .text('✖️ Cancelar', `wiz:cancel:${chatId}`),
+    });
+  });
+
+  bot.callbackQuery(/^wiz:go:(\d+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const chatId = Number(ctx.match?.[1]);
+    if (ctx.chat?.id !== chatId) {
+      await ctx.editMessageText('No es tu asistente.');
+      return;
+    }
+    const wiz = wizards.get(chatId);
+    if (!wiz) {
+      await ctx.editMessageText('El asistente expiró.');
+      return;
+    }
+    if (deps.readOnly()) {
+      await ctx.editMessageText('Modo solo-lectura activo.');
+      return;
+    }
+    await ctx.editMessageText('🔧 Instalando Coolify… tarda 2-5 minutos, te voy avisando.');
+    await runInstall(ctx, deps, wiz);
+  });
+
+  bot.callbackQuery(/^wiz:cancel:(\d+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const chatId = Number(ctx.match?.[1]);
+    if (ctx.chat?.id !== chatId) return;
+    const wiz = wizards.get(chatId);
+    if (wiz) wiz.password = undefined;
+    wizards.delete(chatId);
+    await ctx.editMessageText('Alta cancelada.');
+  });
+
+  bot.callbackQuery(/^wiz:rm:(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const alias = ctx.match?.[1] ?? '';
+    if (alias === '-') {
+      await ctx.editMessageText('Cancelado.');
+      return;
+    }
+    if (deps.readOnly()) {
+      await ctx.editMessageText('Modo solo-lectura activo.');
+      return;
+    }
+    const wasHot = deps.hotServers().some((s) => s.alias === alias);
+    const ok = deps.removeServer(alias);
+    audit(deps, {
+      chatId: ctx.chat?.id ?? 0,
+      userId: ctx.from?.id ?? 0,
+      command: 'servidor quitar',
+      args: { alias },
+      result: ok ? `quitado ${alias}` : `no existía ${alias}`,
+      ok,
+      durationMs: 0,
+    });
+    await ctx.editMessageText(
+      ok
+        ? `✅ <b>${esc(alias)}</b> fuera de la flota${wasHot ? '' : ' (se mantiene en SERVERS_JSON hasta el reinicio)'}.`
+        : `No pude quitar ${esc(alias)}.`,
+      { parse_mode: 'HTML' },
+    );
+  });
+
   bot.on('message:text', async (ctx) => {
+    const wizard = wizards.get(ctx.chat.id);
+    if (wizard && wizard.userId === ctx.from?.id && Date.now() - wizard.createdAt < WIZARD_TTL) {
+      const text = ctx.message.text.trim();
+
+      if (wizard.step === 'ssh-user') {
+        wizard.user = text || wizard.user;
+        wizard.createdAt = Date.now();
+        wizards.set(wizard.chatId, wizard);
+        await ctx.reply(
+          `Usuario SSH: <b>${esc(wizard.user)}</b>\n¿Cómo autentico en ${esc(wizard.ip)}?`,
+          {
+            parse_mode: 'HTML',
+            reply_markup: new InlineKeyboard()
+              .text('🔑 Llave', `wiz:auth:key:${wizard.chatId}`)
+              .text('🔒 Contraseña', `wiz:auth:pass:${wizard.chatId}`),
+          },
+        );
+        return;
+      }
+
+      if (wizard.step === 'password') {
+        wizard.password = text;
+        wizard.step = 'confirm';
+        wizard.createdAt = Date.now();
+        wizards.set(wizard.chatId, wizard);
+        // borramos el mensaje con la contraseña para no dejarla en el historial
+        await ctx.deleteMessage().catch(() => undefined);
+        await ctx.reply(confirmSummary(wizard), {
+          parse_mode: 'HTML',
+          reply_markup: new InlineKeyboard()
+            .text('✅ Instalar Coolify', `wiz:go:${wizard.chatId}`)
+            .text('✖️ Cancelar', `wiz:cancel:${wizard.chatId}`),
+        });
+        return;
+      }
+
+      if (wizard.step === 'await-register' && /^(listo|ok|ya|continuar|contin[uú]a)$/i.test(text)) {
+        await finishOnboarding(ctx, deps);
+        return;
+      }
+    }
+
     const text = ctx.message.text.trim();
     if (!text.toUpperCase().startsWith('CONFIRMAR ')) return;
     const wanted = text.slice('CONFIRMAR '.length).trim();
@@ -861,6 +1082,318 @@ async function runAction(ctx: Context, deps: BotDeps, action: PendingAction): Pr
   }
 }
 
+function confirmSummary(wiz: ProvisionWizard): string {
+  return [
+    `<b>Instalar Coolify en ${esc(wiz.ip)}</b>`,
+    `alias: ${esc(wiz.alias)}`,
+    `usuario SSH: <code>${esc(wiz.user)}</code>`,
+    `autenticación: ${wiz.auth === 'password' ? 'contraseña' : 'llave'}`,
+    '',
+    'Descargo y ejecuto el instalador oficial de Coolify. Al terminar te paso el enlace para crear la cuenta raíz.',
+  ].join('\n');
+}
+
+/** Arma el destino SSH a partir del asistente y la config (llave del disco o contraseña en memoria). */
+function buildTarget(wiz: ProvisionWizard, cfg: ProvisionRuntime): SshTarget {
+  const target: SshTarget = { host: wiz.ip, port: cfg.sshPort, username: wiz.user || cfg.user };
+  if (wiz.auth === 'password') {
+    if (!wiz.password) throw new Error('falta la contraseña SSH');
+    target.password = wiz.password;
+  } else {
+    if (!cfg.keyPath) throw new Error('no configuraste PROVISION_SSH_KEY_PATH para usar llave');
+    try {
+      target.privateKey = readFileSync(cfg.keyPath);
+    } catch {
+      throw new Error(`no pude leer la llave privada en ${cfg.keyPath}`);
+    }
+  }
+  return target;
+}
+
+function altaOkMessage(entry: ServerCfg, range: [number, number]): string {
+  return [
+    `✅ <b>${esc(entry.alias)}</b> (${esc(entry.name)}) agregado a la flota en caliente.`,
+    `MCP: <code>${esc(entry.url)}</code>`,
+    `WAHA reservado: <b>waha${range[0]}–waha${range[1]}</b>`,
+    '',
+    '⚠️ El token del equipo quedó guardado en la base local (data/state.sqlite) para sobrevivir reinicios;',
+    'no se escribe en los logs ni se muestra acá. Para sacarlo, /servidor quitar.',
+  ].join('\n');
+}
+
+/** Inicia el asistente de alta de un VPS virgen. */
+async function startServerWizard(ctx: Context, deps: BotDeps, args: string[]): Promise<void> {
+  if (deps.readOnly()) {
+    await ctx.reply('Modo solo-lectura activo.');
+    return;
+  }
+  const ip = (args[0] ?? '').trim();
+  if (!ip || !isIpv4(ip)) {
+    await ctx.reply('Uso: /servidor nuevo <ip> [alias]  — ej: /servidor nuevo 203.0.113.10 capi5');
+    return;
+  }
+  const alias = (args[1] ?? '').trim() || defaultAlias(deps.fleet.servers.map((s) => s.alias));
+  if (deps.fleet.servers.some((s) => s.alias === alias)) {
+    await ctx.reply(`El alias <b>${esc(alias)}</b> ya está en la flota. Probá otro.`, { parse_mode: 'HTML' });
+    return;
+  }
+  const cfg = deps.provisionCfg();
+  const chatId = ctx.chat?.id ?? 0;
+  wizards.set(chatId, {
+    chatId,
+    userId: ctx.from?.id ?? 0,
+    step: 'ssh-user',
+    ip,
+    alias,
+    user: cfg.user,
+    auth: 'key',
+    createdAt: Date.now(),
+  });
+  await ctx.reply(
+    [`🚀 <b>Alta de ${esc(alias)}</b> (${esc(ip)})`, 'Paso 1/3 · ¿Usuario SSH? (ej. <code>root</code>)'].join('\n'),
+    { parse_mode: 'HTML' },
+  );
+}
+
+/** Ejecuta la instalación de Coolify y avanza a la espera del registro. */
+async function runInstall(ctx: Context, deps: BotDeps, wiz: ProvisionWizard): Promise<void> {
+  const cfg = deps.provisionCfg();
+  const started = Date.now();
+  let target: SshTarget;
+  try {
+    target = buildTarget(wiz, cfg);
+  } catch (err) {
+    wizards.delete(wiz.chatId);
+    await ctx.reply(`❌ ${(err as Error).message}`);
+    return;
+  }
+
+  let lastPing = 0;
+  const onProgress = (line: string): void => {
+    if (Date.now() - lastPing < 12_000) return;
+    lastPing = Date.now();
+    void ctx.reply(`🔧 ${esc(line)}`, { parse_mode: 'HTML' }).catch(() => undefined);
+  };
+
+  try {
+    const res = await installCoolify(target, { onProgress, timeoutMs: cfg.timeoutMs });
+    if (!res.ok) {
+      const parsed = parseInstallerLog(res.log);
+      wiz.password = undefined;
+      audit(deps, {
+        chatId: wiz.chatId,
+        userId: wiz.userId,
+        command: 'servidor nuevo',
+        args: { ip: wiz.ip, alias: wiz.alias, user: wiz.user },
+        result: `instalador incompleto: ${formatInstallerProgress(parsed)}`,
+        ok: false,
+        durationMs: Date.now() - started,
+      });
+      await ctx.reply(
+        `⚠️ El instalador no terminó a tiempo (${esc(formatInstallerProgress(parsed))}).\n` +
+          `Revisá <code>/root/coolify-install.log</code> en ${esc(wiz.ip)} y volvé a intentar.`,
+        { parse_mode: 'HTML' },
+      );
+      return;
+    }
+    wiz.step = 'await-register';
+    wiz.createdAt = Date.now();
+    wizards.set(wiz.chatId, wiz);
+    audit(deps, {
+      chatId: wiz.chatId,
+      userId: wiz.userId,
+      command: 'servidor nuevo',
+      args: { ip: wiz.ip, alias: wiz.alias, user: wiz.user },
+      result: 'coolify instalado',
+      ok: true,
+      durationMs: Date.now() - started,
+    });
+    await ctx.reply(
+      [
+        `✅ <b>Coolify instalado</b> en ${esc(wiz.ip)}`,
+        '',
+        `Creá la cuenta raíz en http://${esc(wiz.ip)}:8000/register`,
+        'Tenés ~10 minutos; si se pasa, entrá por SSH y corré <code>docker restart coolify</code>.',
+        '',
+        'Cuando esté creada la cuenta, mandá <b>/servidor listo</b> (o simplemente «listo») y sigo con el alta.',
+      ].join('\n'),
+      { parse_mode: 'HTML', link_preview_options: { is_disabled: true } },
+    );
+  } catch (err) {
+    wiz.password = undefined;
+    wizards.delete(wiz.chatId);
+    audit(deps, {
+      chatId: wiz.chatId,
+      userId: wiz.userId,
+      command: 'servidor nuevo',
+      args: { ip: wiz.ip, alias: wiz.alias, user: wiz.user },
+      result: (err as Error).message,
+      ok: false,
+      durationMs: Date.now() - started,
+    });
+    await ctx.reply(`❌ Falló la instalación por SSH: ${(err as Error).message}`);
+  }
+}
+
+/** Segunda mitad del asistente: onboarding de Coolify + alta en la flota. */
+async function finishOnboarding(ctx: Context, deps: BotDeps): Promise<void> {
+  if (deps.readOnly()) {
+    await ctx.reply('Modo solo-lectura activo.');
+    return;
+  }
+  const wiz = wizards.get(ctx.chat?.id ?? 0);
+  if (!wiz || wiz.step !== 'await-register') {
+    await ctx.reply('No hay un alta pendiente. Empezá con /servidor nuevo <ip> [alias].');
+    return;
+  }
+  const cfg = deps.provisionCfg();
+  const started = Date.now();
+  await ctx.reply('⏳ Habilitando MCP y API, acuñando token y descubriendo UUIDs…');
+  try {
+    const target = buildTarget(wiz, cfg);
+    const onb = await onboardCoolify(target, {
+      onProgress: (line) => void ctx.reply(`· ${esc(line)}`, { parse_mode: 'HTML' }).catch(() => undefined),
+      timeoutMs: cfg.timeoutMs,
+      projectName: cfg.projectName,
+    });
+    const range = nextWahaRange(deps.fleet.servers.map((s) => s.wahaRange));
+    const entry = buildFleetEntry({
+      alias: wiz.alias,
+      ip: wiz.ip,
+      token: onb.token,
+      projectUuid: onb.projectUuid,
+      environmentName: onb.environmentName,
+      serverUuid: onb.serverUuid,
+      destinationUuid: onb.destinationUuid,
+      wahaRange: range,
+    });
+    deps.addServer(entry, wiz.userId);
+    audit(deps, {
+      chatId: wiz.chatId,
+      userId: wiz.userId,
+      command: 'servidor nuevo',
+      args: { ip: wiz.ip, alias: wiz.alias },
+      result: 'alta completada',
+      ok: true,
+      durationMs: Date.now() - started,
+    });
+    await ctx.reply(altaOkMessage(entry, range), { parse_mode: 'HTML' });
+  } catch (err) {
+    audit(deps, {
+      chatId: wiz.chatId,
+      userId: wiz.userId,
+      command: 'servidor nuevo',
+      args: { ip: wiz.ip, alias: wiz.alias },
+      result: (err as Error).message,
+      ok: false,
+      durationMs: Date.now() - started,
+    });
+    await ctx.reply(`❌ No pude completar el alta: ${(err as Error).message}`);
+    return;
+  }
+  wiz.password = undefined;
+  wizards.delete(wiz.chatId);
+}
+
+/** Alta de un Coolify ya instalado: descubre UUIDs con el token y da de alta. */
+async function addExistingServer(ctx: Context, deps: BotDeps, args: string[]): Promise<void> {
+  if (deps.readOnly()) {
+    await ctx.reply('Modo solo-lectura activo.');
+    return;
+  }
+  const alias = (args[0] ?? '').trim();
+  const ip = (args[1] ?? '').trim();
+  const token = (args[2] ?? '').trim();
+  if (!alias || !ip || !token) {
+    await ctx.reply('Uso: /servidor agregar <alias> <ip> <token de API>');
+    return;
+  }
+  if (!isIpv4(ip)) {
+    await ctx.reply('La IP no parece válida (formato IPv4).');
+    return;
+  }
+  if (!isCoolifyToken(token)) {
+    await ctx.reply('El token no tiene el formato esperado (id|secreto, ~50 chars).');
+    return;
+  }
+  if (deps.fleet.servers.some((s) => s.alias === alias)) {
+    await ctx.reply(`El alias <b>${esc(alias)}</b> ya está en la flota.`, { parse_mode: 'HTML' });
+    return;
+  }
+  // el mensaje trae un token válido: lo borramos del chat para no dejarlo en el historial
+  await ctx.deleteMessage().catch(() => undefined);
+  const cfg = deps.provisionCfg();
+  const started = Date.now();
+  await ctx.reply(`⏳ Hablando con la API de Coolify en ${esc(ip)}…`, { parse_mode: 'HTML' });
+  try {
+    const disc = await discoverCoolify(ip, token, {
+      projectName: cfg.projectName,
+      onProgress: (line) => void ctx.reply(`· ${esc(line)}`, { parse_mode: 'HTML' }).catch(() => undefined),
+    });
+    const range = nextWahaRange(deps.fleet.servers.map((s) => s.wahaRange));
+    const entry = buildFleetEntry({
+      alias,
+      ip,
+      token,
+      projectUuid: disc.projectUuid,
+      environmentName: disc.environmentName,
+      serverUuid: disc.serverUuid,
+      destinationUuid: disc.destinationUuid,
+      wahaRange: range,
+    });
+    deps.addServer(entry, ctx.from?.id ?? 0);
+    audit(deps, {
+      chatId: ctx.chat?.id ?? 0,
+      userId: ctx.from?.id ?? 0,
+      command: 'servidor agregar',
+      args: { alias, ip },
+      result: 'alta completada',
+      ok: true,
+      durationMs: Date.now() - started,
+    });
+    await ctx.reply(altaOkMessage(entry, range), { parse_mode: 'HTML' });
+  } catch (err) {
+    audit(deps, {
+      chatId: ctx.chat?.id ?? 0,
+      userId: ctx.from?.id ?? 0,
+      command: 'servidor agregar',
+      args: { alias, ip },
+      result: (err as Error).message,
+      ok: false,
+      durationMs: Date.now() - started,
+    });
+    await ctx.reply(`❌ No pude dar de alta ${esc(alias)}: ${(err as Error).message}`, { parse_mode: 'HTML' });
+  }
+}
+
+/** Pide confirmación para quitar un servidor de la flota. */
+async function removeServerAction(ctx: Context, deps: BotDeps, args: string[]): Promise<void> {
+  if (deps.readOnly()) {
+    await ctx.reply('Modo solo-lectura activo.');
+    return;
+  }
+  const alias = (args[0] ?? '').trim();
+  if (!alias) {
+    await ctx.reply('Uso: /servidor quitar <alias>');
+    return;
+  }
+  if (!deps.fleet.servers.some((s) => s.alias === alias)) {
+    await ctx.reply(`No tengo a <b>${esc(alias)}</b> en la flota. Probá /servidores.`, { parse_mode: 'HTML' });
+    return;
+  }
+  const hot = deps.hotServers().some((s) => s.alias === alias);
+  const kb = new InlineKeyboard().text('✅ Quitar', `wiz:rm:${alias}`).text('✖️ Cancelar', 'wiz:rm:-');
+  await ctx.reply(
+    [
+      `¿Quitar <b>${esc(alias)}</b> de la flota?`,
+      hot
+        ? 'Es un alta en caliente: se borra su token de la base local.'
+        : 'Viene de SERVERS_JSON: se saca solo de la sesión hasta el próximo reinicio.',
+    ].join('\n'),
+    { parse_mode: 'HTML', reply_markup: kb },
+  );
+}
+
 function helpText(deps: BotDeps): string {
   return [
     '<b>capi-ops</b> — monitoreo y control de la flota',
@@ -887,6 +1420,11 @@ function helpText(deps: BotDeps): string {
     '/deploy | /restart | /stop | /delete &lt;wahaNN|uuid&gt;',
     '/epdeploy | /eprestart | /epstop | /epstart &lt;cliente/servicio&gt;',
     '/modo solo-lectura | /modo normal',
+    '',
+    '<b>Servidores</b>',
+    '/servidor nuevo &lt;ip&gt; [alias] — instala Coolify en un VPS virgen',
+    '/servidor agregar &lt;alias&gt; &lt;ip&gt; &lt;token&gt; — alta de un Coolify existente',
+    '/servidor quitar &lt;alias&gt; — saca un servidor de la flota',
     '',
     `Modo actual: <b>${deps.readOnly() ? 'solo-lectura' : 'normal'}</b>`,
   ].join('\n');

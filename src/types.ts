@@ -29,6 +29,12 @@ export interface FleetCfg {
   servers: ServerCfg[];
 }
 
+/** Servidor dado de alta en caliente desde el bot (vive en SQLite, no en SERVERS_JSON). */
+export interface StoredFleetServer extends ServerCfg {
+  addedBy: number | null;
+  createdAt: number;
+}
+
 export interface AppInfo {
   uuid: string;
   name: string;
