@@ -75,6 +75,9 @@ por servidor cuando falla más de una instancia y horario silencioso que solo de
 | `/epdeploy` · `/eprestart` · `/epstop` · `/epstart` | Acciones sobre un servicio de EasyPanel, con botón de confirmación |
 | `/incidentes` · `/auditoria` | Incidentes abiertos · últimas acciones ejecutadas |
 | `/instalar waha [n] [srv]` | Crea instancias, elige el servidor con capacidad y reporta dónde quedaron |
+| `/servidor nuevo <ip> [alias]` | Instala Coolify en un VPS virgen por SSH y lo registra en la flota |
+| `/servidor agregar <alias> <ip> <token>` | Da de alta un panel Coolify que ya está instalado |
+| `/servidor quitar <alias>` | Saca un servidor de la flota (con botón de confirmación) |
 | `/deploy` · `/restart` · `/stop` · `/delete` | Acciones con botón de confirmación; `delete` pide tipear `CONFIRMAR <instancia>` |
 | `/modo solo-lectura` \| `/modo normal` | Congela o habilita las acciones |
 
@@ -227,6 +230,42 @@ Qué agrega:
 > Si el servidor entero se cae, este watcher también: configurá `HEARTBEAT_URL` (healthchecks.io) para
 > el aviso de "muerto" desde afuera.
 
+### Dar de alta servidores desde Telegram
+
+Dos caminos, ambos por chat y con confirmación por botón:
+
+**VPS virgen — `/servidor nuevo <ip> [alias]`**
+
+1. El bot pregunta el usuario SSH y si se autentica por **llave** (`PROVISION_SSH_KEY_PATH`) o por
+   **contraseña**. La contraseña vive solo en memoria: no se guarda en disco ni se escribe en los logs,
+   y el mensaje que la contiene se borra.
+2. Con botón de confirmación, entra por SSH y ejecuta el instalador oficial de Coolify en segundo plano,
+   informando el avance (paso `9/9` o los contenedores `coolify`, `coolify-db`, `coolify-redis`,
+   `coolify-sentinel` y `coolify-proxy`).
+3. Te pasa el enlace `http://<ip>:8000/register`: **la cuenta raíz la crea una persona** (capi-ops no
+   automatiza credenciales humanas).
+4. Cuando mandás `/servidor listo`, el bot habilita MCP y API en el panel, acuña un token de equipo con
+   Sanctum (`User::createToken`, nunca insertando a mano en `personal_access_tokens`), descubre los UUID
+   (servidor, destino y proyecto) por la API y registra el servidor en la flota.
+
+**Coolify existente — `/servidor agregar <alias> <ip> <token>`**
+
+Pegás el token de equipo (`id|secreto`) y la IP; el bot descubre los UUID y da de alta el servidor.
+
+En ambos casos:
+
+- El `wahaRange` se asigna solo: arranca donde termina el mayor de la flota.
+- El servidor se guarda en SQLite (`fleet_servers`), así sobrevive reinicios sin tocar `SERVERS_JSON`
+  (que es de solo lectura en runtime). `/servidor quitar <alias>` lo saca.
+- El token del equipo **se guarda en la base local** (`data/state.sqlite`) para poder hablar con el MCP
+  tras un reinicio. Nunca se escribe en los logs ni se muestra en el chat; `/auditoria` avisa qué
+  servidores guardan un token.
+- Todo respeta `OPS_READ_ONLY` y la allowlist, y queda en la auditoría (sin secretos).
+
+Se necesita la dependencia `ssh2` (la imagen `node:24-alpine` no trae cliente `ssh`); ya viene en
+`package.json`. Variables asociadas: `PROVISION_USER`, `PROVISION_SSH_PORT`, `PROVISION_SSH_KEY_PATH`,
+`PROVISION_PROJECT_NAME`, `PROVISION_TIMEOUT_MINUTES`.
+
 ---
 
 ## 📦 Despliegue
@@ -285,6 +324,10 @@ docker run -d --name capi-ops -p 8080:8080 \
 | `DIGEST_AT` | Digest diario | `09:00` |
 | `HEARTBEAT_URL` | Ping externo (healthchecks.io) | vacío |
 | `INTENT_TOKEN` | Secreto para `POST /intent` | vacío |
+| `PROVISION_USER` · `PROVISION_SSH_PORT` | Usuario y puerto SSH para `/servidor nuevo` | `root` / `22` |
+| `PROVISION_SSH_KEY_PATH` | Llave privada para el alta por SSH (vacío = solo contraseña) | vacío |
+| `PROVISION_PROJECT_NAME` | Proyecto que se crea en el Coolify nuevo | `capi-ops` |
+| `PROVISION_TIMEOUT_MINUTES` | Tope de espera del instalador de Coolify | `12` |
 
 La flota **no vive en el repo**: se pasa por `SERVERS_JSON` o por un `config/servers.json` ignorado por
 git. Se versiona solo [`config/servers.example.json`](./config/servers.example.json) con placeholders.

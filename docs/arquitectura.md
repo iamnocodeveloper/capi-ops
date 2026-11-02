@@ -65,6 +65,7 @@ cada POLL_SECONDS (60 s)
 | `rules.ts` | Funciones puras: snapshot → hallazgos | Sin estado, fácil de testear |
 | `incidents.ts` | Máquina de estados y política de notificación | Horario silencioso y cooldown viven acá |
 | `installer.ts` | Numeración global, elección de servidor, deploy, verificación | Replica el procedimiento manual de la flota |
+| `provision.ts` | Alta de servidores: instalación de Coolify por SSH, onboarding (MCP/API + token) y descubrimiento de UUID | Cliente `ssh2` (la imagen no trae `ssh`); las funciones puras se prueban en `scripts/check-provision.ts` |
 | `ops.ts` | Acciones puntuales sobre una app | Devuelve texto listo para el chat |
 | `bot.ts` | Grammy, allowlist, confirmaciones, formato | El estado pendiente expira a los 5 min |
 | `http.ts` | `/health`, `/metrics`, `/intent` | `node:http`, sin framework |
@@ -81,6 +82,10 @@ metrics(alias, ts, cpu, mem_percent, disk_percent, load1)    -- retención 30 d�
 actions(id, ts, chat_id, user_id, command, args_json,
         result, ok, duration_ms)                             -- auditoría
 settings(key, value)                                         -- last_waha_number, last_digest
+fleet_servers(alias PK, name, url, ip, token, token_env,
+        project_uuid, environment_name, server_uuid,
+        destination_uuid, waha_from, waha_to,
+        added_by, created_at)                                -- servidores dados de alta desde el bot
 ```
 
 `incidents.key` es estable (`srv:capi4:waha-dns`, `srv:capi1:cpu`, `ep:ep:svc:clientes_feroz-landing:down`)
@@ -105,7 +110,8 @@ hallazgo `anomaly`. Para CPU se exige además un mínimo de 15% para evitar ruid
 
 ## Puntos de extensión
 
-- **Nuevo servidor**: una entrada en `config/servers.json` + su token en el entorno.
+- **Nuevo servidor**: desde el bot (`/servidor nuevo` o `/servidor agregar`), que lo persiste en
+  `fleet_servers`; o a mano, con una entrada en `config/servers.json` + su token en el entorno.
 - **Nueva regla**: una función en `rules.ts` que devuelva `Finding[]`; el motor se encarga del resto.
 - **Nuevo canal**: implementar un `Notifier` (hoy Telegram) y pasarlo al `AlertEngine`.
 - **Lenguaje natural**: `POST /intent` ya traduce "instalá 2 waha" a un comando validado;
