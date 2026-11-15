@@ -7,5 +7,6 @@ data/
 *.log
 msg.txt
 config/servers.json
+config/oficinas.json
 .DS_Store
 redeploy-result.json

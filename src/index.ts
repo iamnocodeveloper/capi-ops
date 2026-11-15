@@ -1,4 +1,4 @@
-import { env, easyPanelCfg, loadFleet, paths, telegramCfg, thresholds, wahaApiKey } from './config.js';
+import { env, easyPanelCfg, loadFleet, loadOffices, paths, telegramCfg, thresholds, wahaApiKey } from './config.js';
 import { Db } from './db.js';
 import { epAsServerSnapshot, probeEasyPanel } from './easypanel.js';
 import { AlertEngine, parseQuietHours } from './incidents.js';
@@ -32,6 +32,7 @@ function log(line: string, level: keyof typeof levels = 'info'): void {
 }
 
 const fleet: FleetCfg = loadFleet();
+const offices = loadOffices();
 const epCfg = easyPanelCfg();
 let epSnapshot: EpSnapshot | null = null;
 const db = new Db(paths.db);
@@ -194,6 +195,15 @@ async function cycle(): Promise<void> {
     for (const snap of snaps) findings.push(...evaluate(snap, ctxBase));
     if (ep) findings.push(...evaluateEasyPanel(ep, ctxBase.thresholds, thresholds.epServiceCpu));
 
+    if (!notifier.healthy()) {
+      findings.push({
+        key: 'ops:telegram',
+        severity: 'critica',
+        title: 'Bot de Telegram sin entregar',
+        detail: notifier.describeProblem(),
+      });
+    }
+
     await engine.reconcile(findings);
     lastCycleAt = Date.now();
     log(
@@ -282,6 +292,7 @@ const bot = telegramCfg.enabled
       ep: () => epSnapshot,
       refreshEp,
       easyPanel: () => epCfg,
+      offices,
       log: (l) => log(l, 'warn'),
     })
   : null;
@@ -302,11 +313,46 @@ const http = startHttp({
   ep: () => epSnapshot,
   refreshEp,
   easyPanel: () => epCfg,
+  offices,
   log,
   startedAt,
   lastCycleAt: () => lastCycleAt,
+  telegramStatus: () => notifier.status(),
   notify: async (text) => notifier.broadcast(text, 'info'),
 });
+
+const BOT_COMMANDS = [
+  { command: 'estado', description: 'Resumen de la flota y EasyPanel' },
+  { command: 'servidores', description: 'IP, apps y rango de WAHA por servidor' },
+  { command: 'instancias', description: 'Inventario de WAHA por servidor' },
+  { command: 'salud', description: 'CPU, memoria, disco y deploys en curso' },
+  { command: 'waha', description: 'Estado de una instancia y sus sesiones' },
+  { command: 'sesiones', description: 'Teléfono, presencia, actividad y proxy por sesión' },
+  { command: 'diag', description: 'Motivo de una sesión FAILED con extracto de log' },
+  { command: 'fallidas', description: 'Barrido de todas las sesiones FAILED' },
+  { command: 'historial', description: 'Logouts y fallos recientes del log retenido' },
+  { command: 'red', description: 'IP de salida y proxy por contenedor y sesión' },
+  { command: 'buscar', description: 'Busca aplicaciones y dominios en la flota' },
+  { command: 'logs', description: 'Últimas líneas o una ventana horaria' },
+  { command: 'oficinas', description: 'Mapeo oficina → servidor/instancia' },
+  { command: 'incidentes', description: 'Incidentes abiertos' },
+  { command: 'stats', description: 'Uptime y alertas del histórico' },
+  { command: 'auditoria', description: 'Últimas acciones ejecutadas' },
+  { command: 'ep', description: 'Host de EasyPanel y actualización pendiente' },
+  { command: 'eps', description: 'Servicios de EasyPanel con estado y CPU' },
+  { command: 'epserv', description: 'Detalle de un servicio de EasyPanel' },
+  { command: 'instalar', description: 'Crea instancias WAHA' },
+  { command: 'deploy', description: 'Despliega una instancia' },
+  { command: 'restart', description: 'Reinicia una instancia' },
+  { command: 'stop', description: 'Detiene una instancia' },
+  { command: 'delete', description: 'Borra una instancia (pide confirmación)' },
+  { command: 'epdeploy', description: 'Despliega un servicio de EasyPanel' },
+  { command: 'eprestart', description: 'Reinicia un servicio de EasyPanel' },
+  { command: 'epstop', description: 'Detiene un servicio de EasyPanel' },
+  { command: 'epstart', description: 'Arranca un servicio de EasyPanel' },
+  { command: 'modo', description: 'Alterna solo-lectura / normal' },
+  { command: 'ayuda', description: 'Ayuda con todos los comandos' },
+];
 
 async function main(): Promise<void> {
   log(`capi-ops arrancando · ${fleet.servers.length} servidores · telegram ${telegramCfg.enabled ? 'on' : 'off'} · solo-lectura ${readOnly}${epCfg ? ' · easypanel on' : ''}`);
@@ -322,7 +368,23 @@ async function main(): Promise<void> {
   }, 6 * 60 * 60 * 1000);
 
   if (telegramCfg.enabled && bot) {
-    void bot.start({ drop_pending_updates: true, onStart: () => log('bot de telegram escuchando') });
+    void bot.api
+      .setMyCommands(BOT_COMMANDS)
+      .catch((err: Error) => log(`setMyCommands falló: ${err.message}`, 'warn'));
+
+    // Sin `.catch`, un token inválido hace rechazar `bot.start()` y en Node 24 ese
+    // rechazo no capturado termina el proceso: el servicio entra en crash loop y
+    // deja de monitorear. Se registra el fallo y se mantiene el watcher vivo.
+    bot
+      .start({
+        drop_pending_updates: true,
+        onStart: () => {
+          notifier.markPollingStarted();
+          log('bot de telegram escuchando');
+        },
+      })
+      .catch((err: Error) => notifier.markPollingError(err.message));
+
     await notifier.broadcast('🚀 capi-ops arriba. Usá /ayuda para ver los comandos.', 'info');
   } else {
     log('TG_TOKEN vacío: el bot queda apagado (se imprimen las alertas en consola)', 'warn');
@@ -339,4 +401,20 @@ const shutdown = (signal: string): void => {
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-void main();
+// Red de seguridad: un rechazo no capturado ya no debe matar el proceso. El ciclo
+// del watcher y `/health` tienen que seguir vivos aunque Telegram falle.
+process.on('unhandledRejection', (reason) => {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  log(`unhandledRejection: ${message}`, 'error');
+  if (/getUpdates|Unauthorized|telegram/i.test(message)) {
+    notifier.markPollingError(message);
+  }
+});
+
+process.on('uncaughtException', (err) => {
+  log(`uncaughtException: ${err.message}`, 'error');
+});
+
+void main().catch((err: Error) => {
+  log(`main() falló: ${err.message}`, 'error');
+});

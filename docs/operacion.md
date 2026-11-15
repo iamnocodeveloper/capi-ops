@@ -146,6 +146,18 @@ Se activa solo con `EASYPANEL_URL` y `EASYPANEL_TOKEN`.
 Para rotar el token de EasyPanel: generar uno nuevo en **Settings → API tokens**, actualizar
 `EASYPANEL_TOKEN` y recrear el servicio. Verificar `curl -s http://<host>:18080/health | jq '.easyPanel.reachable'`.
 
+## Diagnóstico de sesiones WAHA
+
+`/diag` lee `docker logs --since/--until` por SSH para explicar un `FAILED` con hora y motivo.
+Requiere `ssh` por servidor en la flota y la password en `CAPIx_SSH_PASSWORD`; ver
+[`diagnostico-sesiones.md`](./diagnostico-sesiones.md).
+
+- Sin SSH, el comando sigue respondiendo pero sin ventana histórica.
+- `DIAG_SSH=false` apaga el diagnóstico SSH sin afectar al resto del bot.
+- `/red` usa el mismo canal para ver IP de salida y proxy.
+- Comandos: `/diag`, `/sesiones`, `/fallidas`, `/historial`, `/red`, `/oficinas`.
+- Prueba local sin Telegram: `npm run diag -- waha23 plp-3-res 11:30`.
+
 ## Rotar un token de Coolify
 
 **Cambiar la password de un usuario de Coolify revoca todos sus API tokens.** Si se resetea, hay que

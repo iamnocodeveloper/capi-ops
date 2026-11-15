@@ -3,6 +3,47 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 Versionado semántico.
 
+## [0.8.0] — 2026-11-15
+
+### Agregado
+- **Incidente `ops:telegram`**: si el polling se detiene o hay envíos fallidos repetidos, se abre un
+  incidente crítico que se cierra solo cuando Telegram vuelve a entregar.
+- `GET /health` expone `telegramStatus` (polling, último error, fallos consecutivos, último envío OK).
+- Menú de comandos nativo en Telegram vía `setMyCommands` al arrancar.
+- Tests unitarios con `node:test`: `rules`, `incidents` y `time` (29 casos). `npm test` y `npm run check`.
+- CI ejecuta `npm test` además de typecheck y build.
+- Documentación: [`docs/MEMORIA-PROYECTO.md`](./docs/MEMORIA-PROYECTO.md),
+  [`docs/AVANCES.md`](./docs/AVANCES.md) y [`docs/CAMBIOS-2026-11-15.md`](./docs/CAMBIOS-2026-11-15.md).
+
+### Corregido
+- **Crash loop con token de Telegram inválido.** `bot.start()` captura el rechazo; se agregan handlers
+  de `unhandledRejection` y `uncaughtException`, y `main()` con `.catch`. Un fallo de Telegram ya no
+  termina el proceso: el watcher sigue vivo en modo degradado.
+- Reconexión a un bot nuevo (`@nocodeops_bot`) y corrección de la allowlist con el `chat_id` real.
+
+### Notas
+- Los cambios se validaron en el árbol local; la integración con `origin/main` (feature de *provision*
+  por SSH) y el despliegue quedan documentados en `docs/CAMBIOS-2026-11-15.md`.
+- `/health` y `/metrics` siguen sin autenticación y publicados en el puerto del host.
+
+## [0.7.0] — 2026-11-03
+
+### Agregado
+- **Diagnóstico de sesiones WAHA desde Telegram** con ventana horaria real
+  (`docker logs -t --since/--until` por SSH de solo lectura).
+- Comandos nuevos: `/diag` (motivo exacto de un `FAILED` con evidencia), `/fallidas` (barrido de la
+  flota), `/sesiones` (teléfono, presencia, actividad y proxy por sesión), `/historial` (logouts con
+  fecha y motivo), `/red` (IP de salida y proxy por contenedor/sesión) y `/oficinas`.
+- `/logs` acepta ventana (`desde..hasta`) y timestamps en hora local.
+- `/waha` muestra tabla de sesiones con teléfono, presencia, actividad y proxy.
+- Mapeo oficina → servidor/instancia por `config/oficinas.json` u `OFFICES_JSON`.
+- `scripts/diag-session.ts` (`npm run diag`) para el mismo diagnóstico por consola.
+
+### Notas
+- Sin `ssh` configurado por servidor, los comandos degradan a estado + últimas líneas del MCP.
+- `DIAG_SSH=false` desactiva todo el diagnóstico SSH.
+- El historial depende de la retención de logs de Docker (~5 días); no se agregan webhooks.
+
 ## [0.6.0] — 2026-10-31
 
 ### Agregado

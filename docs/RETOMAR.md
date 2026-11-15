@@ -5,6 +5,16 @@
 
 Última actualización: 2026-10-31 · cierre de la etapa 0.6.0 (monitoreo del panel EasyPanel).
 
+> **Actualización 2026-11-15 (0.8.0).** El bot anterior fue borrado y el servicio entró en crash loop.
+> Se reconectó `@nocodeops_bot`, se corrigió la allowlist con el `chat_id` real y se agregó hardening:
+> incidente `ops:telegram`, `bot.start()` con `.catch`, handlers de `unhandledRejection` y
+> `uncaughtException`, `setMyCommands`, 29 tests y documentación de memoria/avances. Ver
+> [`CAMBIOS-2026-11-15.md`](./CAMBIOS-2026-11-15.md).
+>
+> **Divergencia pendiente:** `origin/main` tiene la feature de *provision* por SSH y **no** la etapa
+> 0.7.0 (diag/ssh); el árbol local tiene 0.7.0 sin commitear y **no** *provision*. Hay que integrar
+> ambas líneas antes de desplegar 0.8.0 (procedimiento en el documento de cambios).
+
 ---
 
 ## 1. Qué es, en 30 segundos
@@ -134,22 +144,26 @@ y en `.env.example`.
 
 ## 7. Pendientes, en orden de valor
 
-1. **`HEARTBEAT_URL`.** capi-ops corre en el mismo EasyPanel que vigila: si el host se cae, no puede
+1. **Integrar las dos líneas de trabajo.** Unir la etapa 0.7.0 del árbol local (diag/ssh) con la feature
+   de *provision* de `origin/main`; dejar `main` verde con `npm run check` y desplegar 0.8.0.
+2. **`HEARTBEAT_URL`.** capi-ops corre en el mismo EasyPanel que vigila: si el host se cae, no puede
    avisar. Crear un check externo (healthchecks.io o similar), cargar la URL y recrear.
-2. **Retención del histórico.** `server_samples` y `waha_checks` crecen a diario. Falta una purga
+3. **Retención del histórico.** `server_samples` y `waha_checks` crecen a diario. Falta una purga
    programada (30 días para muestras y chequeos, más para incidentes y acciones). Las consultas están
    listas en [`operacion.md`](./operacion.md).
-3. **Aviso por deploy de EasyPanel.** Hoy no se detecta cada deploy; se puede comparar el commit
+4. **Aviso por deploy de EasyPanel.** Hoy no se detecta cada deploy; se puede comparar el commit
    desplegado contra el anterior y emitir un hallazgo informativo.
-4. **Comandos `/store`, `/purgar` y `/limpiar`.** El procedimiento está probado a mano y documentado
+5. **Comandos `/store`, `/purgar` y `/limpiar`.** El procedimiento está probado a mano y documentado
    en [`higiene-disco.md`](./higiene-disco.md); falta exponerlo en el bot usando `docker_cleanup` y
    `manage_scheduled_task` del MCP.
-5. **Volumen para `/app/.sessions`.** Hoy un redeploy borra el store y obliga a re-escanear QR. Es una
+6. **Volumen para `/app/.sessions`.** Hoy un redeploy borra el store y obliga a re-escanear QR. Es una
    decisión de producto: con volumen, el pairing sobrevive pero la purga pasa a ser obligatoria.
-6. **Alertas de sesión de WhatsApp.** El health actual mira HTTP y DNS; leer `/api/sessions` para
+7. **Alertas de sesión de WhatsApp.** El health actual mira HTTP y DNS; leer `/api/sessions` para
    detectar `FAILED` o sesiones caídas sería el siguiente salto de calidad.
-7. **Autenticación en `/health` y `/metrics`.** Hoy no piden credenciales; si el puerto queda público,
+8. **Autenticación en `/health` y `/metrics`.** Hoy no piden credenciales; si el puerto queda público,
    muestran IPs y consumo.
+9. **Rate limit y cooldown de acciones destructivas.** Evita doble click o bucles accidentales desde el
+   chat; complementa la confirmación y la auditoría existentes.
 
 ---
 

@@ -19,7 +19,13 @@
       "environmentName": "production",
       "serverUuid": "server-uuid-1",
       "destinationUuid": "destination-uuid-1",
-      "wahaRange": [1, 10]
+      "wahaRange": [1, 10],
+      "ssh": {
+        "user": "root",
+        "port": 22,
+        "passwordEnv": "CAPI1_SSH_PASSWORD",
+        "hostKey": "SHA256:..."
+      }
     }
   ]
 }

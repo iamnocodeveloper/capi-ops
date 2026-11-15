@@ -1,6 +1,6 @@
 {
   "name": "capi-ops",
-  "version": "0.6.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "description": "Monitoreo 24/7 de la flota Coolify/WAHA y del panel EasyPanel propio, con alertas y acciones por Telegram",
@@ -11,17 +11,21 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
+    "diag": "tsx scripts/diag-session.ts",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck"
+    "test": "node --import tsx --test test/rules.test.ts test/incidents.test.ts test/time.test.ts",
+    "check": "npm run typecheck && npm test"
   },
   "dependencies": {
     "grammy": "^1.30.1",
     "pg": "^8.13.1",
+    "ssh2": "^1.17.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/pg": "^8.11.10",
+    "@types/ssh2": "^1.15.6",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3"
   }

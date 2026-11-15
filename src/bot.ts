@@ -7,16 +7,44 @@ import { epAction, epCounts, epStateLabel, findEpService, type EpAction } from '
 import { installWaha, findApp, nextWahaNumber } from './installer.js';
 import { isWaha } from './probe.js';
 import { appLogs, controlApp, deleteApp, deployApp } from './ops.js';
-import { checkWaha, listSessions } from './waha.js';
+import {
+  checkWaha,
+  listSessions,
+  mapLimit,
+  sessionPhone,
+  sessionProxy,
+  sessionWebhook,
+} from './waha.js';
+import {
+  cleanLine,
+  extractEvents,
+  hostPublicIp,
+  lineTimestamp,
+  logsWindow,
+  logoutEvents,
+  networkInfo,
+  pickReason,
+  proxyByContainer,
+  reasonInfo,
+  relevantLines,
+  resolveContainer,
+  type DiagEvent,
+  type ReasonCode,
+} from './diagnostics.js';
+import { hasSsh } from './ssh.js';
+import { diagTimeZone, fmtArt, fmtArtDay, fmtArtTime, parseWhen, windowAround, type ParsedWhen } from './time.js';
 import type {
+  AppInfo,
   EasyPanelCfg,
   EpSnapshot,
   FleetCfg,
+  Offices,
   PendingAction,
   ServerCfg,
   ServerSnapshot,
   Severity,
   WahaHealth,
+  WahaSession,
 } from './types.js';
 import type { StatsSummary } from './pg.js';
 
@@ -42,7 +70,137 @@ export interface BotDeps {
   ep?: () => EpSnapshot | null;
   refreshEp?: () => Promise<EpSnapshot | null>;
   easyPanel?: () => EasyPanelCfg | null;
+  offices: Offices;
   log: (line: string) => void;
+}
+
+interface ResolvedInstance {
+  snapshot: ServerSnapshot;
+  app: AppInfo;
+  server: ServerCfg;
+}
+
+const SHORT_REASONS: Record<ReasonCode, string> = {
+  'primary-logged-out': '403 primary',
+  'logout-other-device': '401 otro disp.',
+  'device-removed': 'dispositivo removido',
+  'logout-api': 'logout API',
+  'logged-out': 'logout',
+  'qr-expired': 'QR expirado',
+  engine: 'motor',
+  network: 'red/proxy',
+  unknown: 'sin dato',
+};
+
+function findOffice(offices: Offices, input: string): { key: string; server: string; instance: string } | null {
+  const wanted = input.toLowerCase().replace(/^oficina\s*/, '').replace(/^of\s*/, '').trim();
+  for (const [key, target] of Object.entries(offices)) {
+    const clean = key.toLowerCase().replace(/^oficina\s*/, '').replace(/^of\s*/, '').trim();
+    if (clean === wanted) return { key, ...target };
+  }
+  return null;
+}
+
+/** Usa el snapshot del watcher (60 s) y solo sondea si todavía no hay datos. */
+async function currentSnapshots(deps: BotDeps): Promise<ServerSnapshot[]> {
+  const cached = deps.snapshots();
+  return cached.length ? cached : deps.refresh();
+}
+
+function resolveInstance(
+  deps: BotDeps,
+  snapshots: ServerSnapshot[],
+  input: string,
+): ResolvedInstance | null {
+  const office = findOffice(deps.offices, input);
+  const target = office ? office.instance : input;
+  const found = findApp(snapshots, target);
+  if (!found) return null;
+  const server = deps.fleet.servers.find((s) => s.alias === found.server.alias);
+  if (!server) return null;
+  return { snapshot: found.server, app: found.app, server };
+}
+
+/** Separa sesión / cuándo / ventana de los argumentos restantes. */
+function splitDiagArgs(
+  tokens: string[],
+  sessionNames: string[],
+): { session?: string; when?: string; window?: string } {
+  const out: { session?: string; when?: string; window?: string } = {};
+  const pending: string[] = [];
+  for (const token of tokens) {
+    const low = token.toLowerCase();
+    const session = !out.session ? sessionNames.find((n) => n.toLowerCase() === low) : undefined;
+    if (session) {
+      out.session = session;
+      continue;
+    }
+    if (pending.length > 0 && /^\d+[mh]$/.test(low)) {
+      out.window = low;
+      continue;
+    }
+    pending.push(token);
+  }
+  if (pending.length) out.when = pending.join(' ');
+  return out;
+}
+
+function targetText(input: string): string {
+  return esc(input);
+}
+
+function sessionActivity(session: WahaSession): number | null {
+  const ts = session.timestamps?.activity;
+  return typeof ts === 'number' && Number.isFinite(ts) ? ts : null;
+}
+
+function sessionMeta(session: WahaSession): string {
+  const phone = sessionPhone(session);
+  const name = session.me?.pushName;
+  const activity = sessionActivity(session);
+  return [
+    phone ? `tel +${phone}${name ? ` (${name})` : ''}` : 'sin teléfono',
+    session.presence ? `presencia ${session.presence}` : null,
+    activity ? `última actividad ${fmtArt(activity)}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+function eventLine(event: DiagEvent): string {
+  const when = event.at ? fmtArtTime(event.at) : '--:--:--';
+  return `[${when}] ${cleanLine(event.text).slice(0, 150)}`;
+}
+
+function sessionFromEvent(text: string): string | null {
+  const match = /(?:session:|\[Session\/)([A-Za-z0-9._-]+)/.exec(text);
+  return match?.[1] ?? null;
+}
+
+async function replyBlocks(ctx: Context, blocks: string[]): Promise<void> {
+  let buffer = '';
+  for (const block of blocks) {
+    if (buffer && buffer.length + block.length + 2 > 3_900) {
+      await ctx.reply(buffer, { parse_mode: 'HTML' });
+      buffer = block;
+    } else {
+      buffer = buffer ? `${buffer}\n\n${block}` : block;
+    }
+  }
+  if (buffer.trim()) await ctx.reply(buffer, { parse_mode: 'HTML' });
+}
+
+function artLogs(raw: string, limit: number): string {
+  return raw
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .slice(-limit)
+    .map((line) => {
+      const ts = lineTimestamp(line);
+      return ts === null ? cleanLine(line) : `[${fmtArtTime(ts)}] ${cleanLine(line)}`;
+    })
+    .join('\n');
 }
 
 interface AuditEntry {
@@ -299,14 +457,37 @@ export function createBot(deps: BotDeps): Bot {
       `estado: ${esc(app.status)} · DNS ${health.dnsOk ? 'ok' : 'mal'} · HTTP ${health.httpOk ? 'ok' : 'falla'}`,
       `engine: ${esc(health.engine ?? '–')} · versión ${esc(health.version ?? '–')}`,
     ];
-    if (sessions) {
-      lines.push(
-        sessions.length
-          ? `sesiones:\n${sessions.map((s) => `  ${s.name}: ${s.status}`).join('\n')}`
-          : 'sesiones: ninguna',
-      );
-    } else {
+    if (sessions === null) {
       lines.push('sesiones: no disponibles');
+    } else if (!sessions.length) {
+      lines.push('sesiones: ninguna');
+    } else {
+      const rows = sessions.map((s) => [
+        s.name,
+        s.status,
+        sessionPhone(s) ? `+${sessionPhone(s)}` : '–',
+        s.me?.pushName ?? '–',
+        s.presence ?? '–',
+        sessionActivity(s) ? fmtArt(sessionActivity(s) as number) : '–',
+        sessionProxy(s) ?? '–',
+      ]);
+      lines.push(pre(table(rows, ['sesión', 'estado', 'tel', 'push', 'pres', 'actividad', 'proxy'])));
+      const notes: string[] = [];
+      for (const s of sessions) {
+        const timelock = s.me?.reachoutTimelock;
+        if (timelock?.isActive) {
+          notes.push(
+            `⚠️ ${s.name}: reachout timelock${timelock.timeEnforcementEnds ? ` hasta ${fmtArt(timelock.timeEnforcementEnds * 1000)}` : ''} — no reiniciar`,
+          );
+        }
+        const capping = s.me?.messageCapping;
+        if (capping?.cappingStatus && capping.cappingStatus !== 'NONE') {
+          notes.push(
+            `⚠️ ${s.name}: capping ${capping.cappingStatus} (${capping.usedQuota ?? '?'}/${capping.totalQuota ?? '?'}) — no reiniciar`,
+          );
+        }
+      }
+      if (notes.length) lines.push(notes.join('\n'));
     }
     await ctx.reply(lines.join('\n'), { parse_mode: 'HTML' });
   });
@@ -549,26 +730,480 @@ export function createBot(deps: BotDeps): Bot {
   });
 
   bot.command('logs', async (ctx) => {
-    const parts = (ctx.match ?? '').trim().split(/\s+/);
-    const target = parts[0] ?? '';
-    const lines = Number(parts[1] ?? 60);
+    const parts = (ctx.match ?? '').trim().split(/\s+/).filter(Boolean);
+    const target = parts.shift() ?? '';
+    if (!target) {
+      await ctx.reply('Uso: /logs <wahaNN|uuid|oficina> [líneas] [desde..hasta]  — ej: /logs waha23 200 03/11 11:00..12:00');
+      return;
+    }
+    let lines = 60;
+    const timeParts: string[] = [];
+    for (const part of parts) {
+      if (/^\d+$/.test(part) && timeParts.length === 0) lines = Math.min(Math.max(Number(part), 10), 500);
+      else timeParts.push(part);
+    }
+
     const snaps = await deps.refresh();
-    const found = findApp(snaps, target);
-    if (!found) {
-      await ctx.reply(`No encontré "${target}".`);
+    const inst = resolveInstance(deps, snaps, target);
+    if (!inst) {
+      await ctx.reply(`No encontré "${target}". Probá /buscar <texto> o /instancias.`);
       return;
     }
-    const server = deps.fleet.servers.find((s) => s.alias === found.server.alias);
-    if (!server) {
-      await ctx.reply('Servidor desconocido.');
-      return;
+
+    const now = Date.now();
+    let when: ParsedWhen | null = null;
+    if (timeParts.length) {
+      try {
+        const [from, to] = timeParts.join(' ').split('..');
+        const start = parseWhen(from, now, diagTimeZone());
+        if (to) {
+          const end = parseWhen(to, now, diagTimeZone());
+          const since = start.point ?? start.since;
+          const until = end.point ?? end.until;
+          const fromLabel = start.point ? fmtArt(start.point) : start.label;
+          const toLabel = end.point ? fmtArt(end.point) : end.label;
+          when = { since, until, label: `${fromLabel} → ${toLabel}` };
+        } else {
+          when = start;
+        }
+      } catch (err) {
+        await ctx.reply((err as Error).message);
+        return;
+      }
     }
+
     try {
-      const logs = await appLogs(server, found.app.uuid, Number.isFinite(lines) ? lines : 60);
-      await ctx.reply(pre(logs.slice(-3500)), { parse_mode: 'HTML' });
+      if (hasSsh(inst.server)) {
+        const container = await resolveContainer(inst.server, inst.app.uuid);
+        const raw = await logsWindow(inst.server, container, {
+          since: when?.since ?? new Date(now - 3_600_000),
+          until: when?.until ?? new Date(now),
+          maxLines: Math.max(lines * 4, 400),
+        });
+        const body = artLogs(raw, lines);
+        const header = `${esc(inst.app.name)} @ ${esc(inst.server.alias)} · ${when?.label ?? 'última hora'}`;
+        await ctx.reply([`<b>${header}</b>`, pre(body || 'sin líneas en la ventana')].join('\n'), {
+          parse_mode: 'HTML',
+        });
+      } else {
+        const logs = await appLogs(inst.server, inst.app.uuid, lines);
+        await ctx.reply(
+          [`<b>${esc(inst.app.name)}</b> · sin SSH, últimas ${lines} líneas`, pre(logs.slice(-3500))].join('\n'),
+          { parse_mode: 'HTML' },
+        );
+      }
     } catch (err) {
       await ctx.reply(`Error leyendo logs: ${(err as Error).message}`);
     }
+  });
+
+  bot.command(['sesiones', 'sessions'], async (ctx) => {
+    const raw = (ctx.match ?? '').trim();
+    if (!raw) {
+      await ctx.reply('Uso: /sesiones <wahaNN|uuid|oficina>  — ej: /sesiones waha23');
+      return;
+    }
+    const snaps = await currentSnapshots(deps);
+    const inst = resolveInstance(deps, snaps, raw);
+    if (!inst) {
+      await ctx.reply(`No encontré "${targetText(raw)}". Probá /instancias o /oficinas.`, { parse_mode: 'HTML' });
+      return;
+    }
+    const sessions = await listSessions(inst.app.domain, deps.wahaKey());
+    if (sessions === null) {
+      await ctx.reply(`No pude leer las sesiones de ${inst.app.name} (¿instancia caída o API key?).`);
+      return;
+    }
+    if (!sessions.length) {
+      await ctx.reply(`${inst.app.name} no tiene sesiones.`);
+      return;
+    }
+    const failed = sessions.filter((s) => s.status === 'FAILED');
+    const rows = sessions.map((s) => [
+      s.name,
+      s.status,
+      sessionPhone(s) ? `+${sessionPhone(s)}` : '–',
+      s.me?.pushName ?? '–',
+      s.presence ?? '–',
+      sessionActivity(s) ? fmtArt(sessionActivity(s) as number) : '–',
+      sessionProxy(s) ?? '–',
+    ]);
+    const lines = [
+      `<b>${esc(inst.app.name)}</b> @ ${esc(inst.server.alias)} — ${sessions.length} sesiones${failed.length ? ` · <b>${failed.length} FAILED</b>` : ''}`,
+      pre(table(rows, ['sesión', 'estado', 'tel', 'push', 'pres', 'actividad', 'proxy'])),
+    ];
+    const notes: string[] = [];
+    const webhooks = new Set<string>();
+    for (const s of sessions) {
+      const timelock = s.me?.reachoutTimelock;
+      if (timelock?.isActive) {
+        notes.push(
+          `⚠️ ${s.name}: reachout timelock${timelock.timeEnforcementEnds ? ` hasta ${fmtArt(timelock.timeEnforcementEnds * 1000)}` : ''} — no reiniciar`,
+        );
+      }
+      const capping = s.me?.messageCapping;
+      if (capping?.cappingStatus && capping.cappingStatus !== 'NONE') {
+        notes.push(
+          `⚠️ ${s.name}: capping ${capping.cappingStatus} (${capping.usedQuota ?? '?'}/${capping.totalQuota ?? '?'}) — no reiniciar`,
+        );
+      }
+      const webhook = sessionWebhook(s);
+      if (webhook) webhooks.add(webhook);
+    }
+    if (webhooks.size) notes.push(`webhook: ${[...webhooks].join(', ')}`);
+    if (notes.length) lines.push(notes.slice(0, 10).join('\n'));
+    if (failed.length) lines.push('Para el motivo exacto: /diag ' + inst.app.name + ' <sesión>');
+    await ctx.reply(lines.join('\n'), { parse_mode: 'HTML' });
+  });
+
+  bot.command(['diag', 'diagnostico'], async (ctx) => {
+    const raw = (ctx.match ?? '').trim();
+    if (!raw) {
+      await ctx.reply(
+        [
+          'Uso: <code>/diag &lt;wahaNN|oficina&gt; [sesión] [cuándo] [±ventana]</code>',
+          'Ejemplos:',
+          '  /diag waha23 plp-3-res 11:30',
+          '  /diag 23 plp-44 03/11 11:43 15m',
+          '  /diag Oficina19 norte hoy',
+          '  /diag waha23          (todas las FAILED)',
+        ].join('\n'),
+        { parse_mode: 'HTML' },
+      );
+      return;
+    }
+
+    const now = Date.now();
+    const [targetArg, ...rest] = raw.split(/\s+/).filter(Boolean);
+    const snaps = await currentSnapshots(deps);
+    const inst = resolveInstance(deps, snaps, targetArg as string);
+    if (!inst) {
+      await ctx.reply(`No encontré "${targetText(targetArg as string)}". Probá /instancias o /oficinas.`, {
+        parse_mode: 'HTML',
+      });
+      return;
+    }
+
+    const sessions = await listSessions(inst.app.domain, deps.wahaKey());
+    if (sessions === null) {
+      await ctx.reply(`No pude leer las sesiones de ${inst.app.name} (¿instancia caída o API key?).`);
+      return;
+    }
+
+    const args = splitDiagArgs(rest, sessions.map((s) => s.name));
+    let when: ParsedWhen;
+    try {
+      when = parseWhen(args.when, now, diagTimeZone());
+      if (args.window && when.point) when = windowAround(when.point, args.window);
+    } catch (err) {
+      await ctx.reply((err as Error).message);
+      return;
+    }
+
+    let targets = args.session
+      ? sessions.filter((s) => s.name.toLowerCase() === args.session?.toLowerCase())
+      : sessions.filter((s) => s.status === 'FAILED');
+    if (args.session && !targets.length) {
+      await ctx.reply(
+        `No encontré la sesión "${args.session}" en ${inst.app.name}. Hay: ${sessions.map((s) => s.name).join(', ')}`,
+      );
+      return;
+    }
+    if (!targets.length) targets = sessions;
+    if (!targets.length) {
+      await ctx.reply(`${inst.app.name} no tiene sesiones.`);
+      return;
+    }
+
+    const sshReady = hasSsh(inst.server);
+    let container: string | null = null;
+    let containerError: string | null = null;
+    if (sshReady) {
+      try {
+        container = await resolveContainer(inst.server, inst.app.uuid);
+      } catch (err) {
+        containerError = (err as Error).message;
+      }
+    }
+    let net: Awaited<ReturnType<typeof networkInfo>> | null = null;
+    if (container) {
+      try {
+        net = await networkInfo(inst.server, container);
+      } catch {
+        net = null;
+      }
+    }
+
+    const blocks: string[] = [];
+    for (const session of targets.slice(0, 8)) {
+      const lines: string[] = [
+        `<b>${esc(inst.app.name)} · ${esc(session.name)} — ${esc(session.status)}</b>`,
+        esc(sessionMeta(session)),
+      ];
+      if (!sshReady) {
+        lines.push(`<i>SSH no configurado para ${esc(inst.server.alias)}: sin ventana histórica.</i>`);
+      } else if (!container) {
+        lines.push(`<i>No pude ubicar el contenedor: ${esc(containerError ?? 'desconocido')}</i>`);
+      }
+
+      let events: DiagEvent[] = [];
+      let rawLogs = '';
+      if (container) {
+        try {
+          rawLogs = await logsWindow(inst.server, container, { since: when.since, until: when.until });
+          events = extractEvents(rawLogs, session.name);
+        } catch (err) {
+          lines.push(`<i>Error leyendo logs: ${esc((err as Error).message)}</i>`);
+        }
+      }
+      if (!events.length) {
+        try {
+          const recent = await appLogs(inst.server, inst.app.uuid, 300);
+          const fallback = extractEvents(recent, session.name);
+          if (fallback.length) {
+            events = fallback;
+            lines.push('<i>Ventana sin eventos: motivo tomado de las últimas líneas del contenedor.</i>');
+          }
+        } catch {
+          /* sin fallback */
+        }
+      }
+
+      const picked = pickReason(events);
+      const info = reasonInfo(picked.code);
+      lines.push(`<b>Motivo:</b> ${esc(info.label)}`);
+      if (picked.event?.at) lines.push(`<b>Cuándo:</b> ${esc(fmtArt(picked.event.at))}`);
+      if (events.length) {
+        lines.push('<b>Evidencia</b>', pre(events.slice(-6).map(eventLine).join('\n')));
+      } else {
+        lines.push(`<i>Sin eventos entre ${esc(when.label)}.</i>`);
+      }
+      const rel = relevantLines(rawLogs, session.name, 6);
+      if (rel.length) lines.push(`<b>Log (${esc(when.label)})</b>`, pre(artLogs(rel.join('\n'), 6)));
+      if (net) {
+        const proxy = net.proxyVars.length ? net.proxyVars.join(', ') : 'sin proxy';
+        const containerIp = net.containerIp && net.containerIp !== net.hostIp ? ` / contenedor ${net.containerIp}` : '';
+        lines.push(`<b>Red:</b> egress ${esc(net.hostIp ?? '–')}${esc(containerIp)} · ${esc(proxy)}`);
+      }
+      if (sessionProxy(session)) lines.push(`<b>Proxy de sesión:</b> ${esc(sessionProxy(session) as string)}`);
+      lines.push(`<b>Acción:</b> ${esc(info.action)}`);
+      blocks.push(lines.join('\n'));
+    }
+    if (targets.length > 8) {
+      blocks.push(`<i>… ${targets.length - 8} sesión(es) más. Pasá el nombre para ver una sola.</i>`);
+    }
+    await replyBlocks(ctx, blocks);
+  });
+
+  bot.command(['fallidas', 'failed'], async (ctx) => {
+    const raw = (ctx.match ?? '').trim();
+    const snaps = await currentSnapshots(deps);
+    let serverAliases = new Set(deps.fleet.servers.map((s) => s.alias));
+    if (raw) {
+      const inst = resolveInstance(deps, snaps, raw);
+      const alias = inst?.server.alias ?? resolveAlias(raw, deps.fleet);
+      if (!alias) {
+        await ctx.reply(`No encontré "${targetText(raw)}". Probá /servidores o /oficinas.`, { parse_mode: 'HTML' });
+        return;
+      }
+      serverAliases = new Set([alias]);
+    }
+
+    const apps = snaps
+      .filter((snap) => serverAliases.has(snap.alias))
+      .flatMap((snap) => snap.apps.filter(isWaha).map((app) => ({ snap, app })));
+
+    const perInstance = await mapLimit(apps, 6, async ({ snap, app }) => {
+      const sessions = await listSessions(app.domain, deps.wahaKey(), 6_000);
+      return { snap, app, failed: (sessions ?? []).filter((s) => s.status === 'FAILED') };
+    });
+
+    const failed = perInstance
+      .flatMap((item) => item.failed.map((session) => ({ snap: item.snap, app: item.app, session })))
+      .sort((a, b) => (sessionActivity(b.session) ?? 0) - (sessionActivity(a.session) ?? 0));
+    if (!failed.length) {
+      await ctx.reply(`Sin sesiones FAILED${raw ? ` en ${targetText(raw)}` : ''} 🎉`, { parse_mode: 'HTML' });
+      return;
+    }
+
+    const decorated = await mapLimit(failed.slice(0, 6), 4, async (item) => {
+      const serverCfg = deps.fleet.servers.find((s) => s.alias === item.snap.alias);
+      if (!serverCfg || !hasSsh(serverCfg)) return { ...item, code: 'unknown' as ReasonCode, at: null as number | null };
+      try {
+        const container = await resolveContainer(serverCfg, item.app.uuid);
+        const events = await logoutEvents(serverCfg, container, {
+          session: item.session.name,
+          days: 3,
+          maxLines: 150,
+        });
+        const picked = pickReason(events);
+        return { ...item, code: picked.code, at: picked.event?.at ?? null };
+      } catch {
+        return { ...item, code: 'unknown' as ReasonCode, at: null as number | null };
+      }
+    });
+
+    const rows = decorated.map((d) => [
+      d.app.name,
+      d.session.name,
+      sessionPhone(d.session) ? `+${sessionPhone(d.session)}` : '–',
+      SHORT_REASONS[d.code],
+      d.at ? `${fmtArtDay(d.at)} ${fmtArtTime(d.at)}` : '–',
+    ]);
+    const blocks = [
+      `<b>Sesiones FAILED</b> (${failed.length})`,
+      pre(table(rows, ['instancia', 'sesión', 'tel', 'motivo', 'desde'])),
+    ];
+    if (failed.length > 6) blocks.push(`<i>mostrando 6 de ${failed.length}; filtrá con /fallidas &lt;srv|oficina&gt;</i>`);
+    await replyBlocks(ctx, blocks);
+  });
+
+  bot.command(['historial', 'historia'], async (ctx) => {
+    const parts = (ctx.match ?? '').trim().split(/\s+/).filter(Boolean);
+    const target = parts.shift();
+    if (!target) {
+      await ctx.reply('Uso: /historial <wahaNN|oficina> [sesión] [días]  — ej: /historial waha20 5');
+      return;
+    }
+    const snaps = await currentSnapshots(deps);
+    const inst = resolveInstance(deps, snaps, target);
+    if (!inst) {
+      await ctx.reply(`No encontré "${targetText(target)}". Probá /instancias o /oficinas.`, { parse_mode: 'HTML' });
+      return;
+    }
+    if (!hasSsh(inst.server)) {
+      await ctx.reply(`SSH no configurado para ${inst.server.alias}: no puedo leer el historial de logs.`);
+      return;
+    }
+
+    const sessions = await listSessions(inst.app.domain, deps.wahaKey());
+    let session: string | undefined;
+    let days = 5;
+    for (const part of parts) {
+      const match = sessions?.find((s) => s.name.toLowerCase() === part.toLowerCase());
+      if (match) session = match.name;
+      else if (/^\d+$/.test(part)) days = Math.min(Math.max(Number(part), 1), 30);
+    }
+
+    let container: string;
+    try {
+      container = await resolveContainer(inst.server, inst.app.uuid);
+    } catch (err) {
+      await ctx.reply(`No pude ubicar el contenedor: ${(err as Error).message}`);
+      return;
+    }
+
+    let events: DiagEvent[];
+    try {
+      events = await logoutEvents(inst.server, container, { session, days });
+    } catch (err) {
+      await ctx.reply(`Error leyendo el historial: ${(err as Error).message}`);
+      return;
+    }
+    if (!events.length) {
+      await ctx.reply(`Sin eventos de logout/fallo en los últimos ${days} días${session ? ` para ${session}` : ''}.`);
+      return;
+    }
+
+    const rows = events
+      .slice()
+      .reverse()
+      .slice(0, 80)
+      .map((event) => [
+        event.at ? fmtArtDay(event.at) : '??',
+        event.at ? fmtArtTime(event.at) : '--:--:--',
+        sessionFromEvent(event.text) ?? session ?? '–',
+        SHORT_REASONS[event.code],
+      ]);
+    await replyBlocks(ctx, [
+      `<b>Historial ${esc(inst.app.name)}</b> · ${days} días${session ? ` · ${esc(session)}` : ''} · ${events.length} eventos`,
+      pre(table(rows, ['día', 'hora', 'sesión', 'motivo'])),
+    ]);
+  });
+
+  bot.command(['red', 'ip'], async (ctx) => {
+    const raw = (ctx.match ?? '').trim();
+    if (!raw) {
+      await ctx.reply('Uso: /red <wahaNN|servidor|oficina>  — ej: /red waha23 o /red capi2');
+      return;
+    }
+    const snaps = await currentSnapshots(deps);
+    const inst = resolveInstance(deps, snaps, raw);
+
+    if (inst) {
+      if (!hasSsh(inst.server)) {
+        await ctx.reply(`SSH no configurado para ${inst.server.alias}: no puedo leer la red del contenedor.`);
+        return;
+      }
+      let container: string;
+      try {
+        container = await resolveContainer(inst.server, inst.app.uuid);
+      } catch (err) {
+        await ctx.reply(`No pude ubicar el contenedor: ${(err as Error).message}`);
+        return;
+      }
+      try {
+        const net = await networkInfo(inst.server, container);
+        const sessions = await listSessions(inst.app.domain, deps.wahaKey());
+        const blocks: string[] = [
+          `<b>${esc(inst.app.name)}</b> @ ${esc(inst.server.alias)} (${esc(inst.server.ip)})`,
+          `IP de salida del host: <code>${esc(net.hostIp ?? '–')}</code>`,
+          `IP de salida del contenedor: <code>${esc(net.containerIp ?? '–')}</code>`,
+          net.proxyVars.length
+            ? `<b>Proxy del contenedor</b>\n${pre(net.proxyVars.join('\n'))}`
+            : 'Proxy del contenedor: <b>sin proxy</b> (sale por la IP del host)',
+        ];
+        if (sessions?.length) {
+          const rows = sessions.map((s) => [s.name, s.status, sessionProxy(s) ?? '–']);
+          blocks.push('<b>Proxy por sesión</b>', pre(table(rows, ['sesión', 'estado', 'proxy'])));
+        }
+        await replyBlocks(ctx, blocks);
+      } catch (err) {
+        await ctx.reply(`Error consultando la red: ${(err as Error).message}`);
+      }
+      return;
+    }
+
+    const alias = resolveAlias(raw, deps.fleet);
+    const serverCfg = alias ? deps.fleet.servers.find((s) => s.alias === alias) : undefined;
+    if (!serverCfg) {
+      await ctx.reply(`No encontré "${targetText(raw)}". Probá /servidores o /oficinas.`, { parse_mode: 'HTML' });
+      return;
+    }
+    if (!hasSsh(serverCfg)) {
+      await ctx.reply(`SSH no configurado para ${serverCfg.alias}.`);
+      return;
+    }
+    try {
+      const hostIp = await hostPublicIp(serverCfg);
+      const proxies = await proxyByContainer(serverCfg);
+      const rows = [...proxies.entries()].map(([name, vars]) => [
+        name.slice(0, 26),
+        vars.length ? vars.join(' ') : 'sin proxy',
+      ]);
+      await replyBlocks(ctx, [
+        `<b>${esc(serverCfg.name)}</b> (${esc(serverCfg.alias)})`,
+        `IP de salida del host: <code>${esc(hostIp ?? serverCfg.ip)}</code>`,
+        pre(table(rows, ['contenedor', 'proxy'])),
+      ]);
+    } catch (err) {
+      await ctx.reply(`Error consultando la red: ${(err as Error).message}`);
+    }
+  });
+
+  bot.command(['oficinas', 'oficina'], async (ctx) => {
+    const entries = Object.entries(deps.offices);
+    if (!entries.length) {
+      await ctx.reply(
+        'Sin mapeo de oficinas. Creá config/oficinas.json (o OFFICES_JSON) con {"Oficina19":{"server":"capi2","instance":"waha20"}}.',
+      );
+      return;
+    }
+    const rows = entries.map(([name, target]) => [name, target.server, target.instance]);
+    await ctx.reply(
+      [`<b>Oficinas</b>`, pre(table(rows, ['oficina', 'servidor', 'instancia']))].join('\n'),
+      { parse_mode: 'HTML' },
+    );
   });
 
   bot.command('instalar', async (ctx) => {
@@ -870,9 +1505,15 @@ function helpText(deps: BotDeps): string {
     '/servidores — IP, apps y rango de WAHA',
     '/instancias &lt;srv&gt; — qué WAHA hay en un servidor (ej: /instancias 4)',
     '/salud [srv] — detalle de métricas',
-    '/waha &lt;wahaNN|uuid&gt; — estado de una instancia',
+    '/waha &lt;wahaNN|uuid&gt; — estado de una instancia y sus sesiones',
+    '/sesiones &lt;wahaNN|oficina&gt; — teléfono, presencia, actividad y proxy por sesión',
+    '/diag &lt;wahaNN|oficina&gt; [sesión] [cuándo] — motivo exacto de un FAILED con log',
+    '/fallidas [srv|oficina] — barrido de todas las sesiones FAILED',
+    '/historial &lt;wahaNN&gt; [sesión] [días] — logouts con fecha y motivo',
+    '/red &lt;wahaNN|srv|oficina&gt; — IP de salida y proxy',
     '/buscar &lt;texto&gt; — busca apps y dominios',
-    '/logs &lt;wahaNN&gt; [líneas] — últimos logs',
+    '/logs &lt;wahaNN&gt; [líneas] [desde..hasta] — logs con ventana horaria',
+    '/oficinas — mapeo oficina → servidor/instancia',
     '/incidentes — incidentes abiertos',
     '/stats [días] — uptime, disponibilidad y alertas del histórico',
     '/auditoria — últimas acciones',

@@ -11,6 +11,7 @@ export interface HttpDeps extends BotDeps {
   lastCycleAt: () => number;
   notify: (text: string) => Promise<void>;
   stats?: (days: number) => Promise<StatsSummary | null>;
+  telegramStatus?: () => unknown;
 }
 
 export function startHttp(deps: HttpDeps): { close: () => void } {
@@ -24,6 +25,7 @@ export function startHttp(deps: HttpDeps): { close: () => void } {
           uptimeSeconds: Math.round((Date.now() - deps.startedAt) / 1000),
           lastCycleAt: deps.lastCycleAt() ? new Date(deps.lastCycleAt()).toISOString() : null,
           telegram: telegramCfg.enabled,
+          telegramStatus: deps.telegramStatus?.() ?? null,
           readOnly: deps.readOnly(),
           servers: deps.snapshots().map((s) => ({
             alias: s.alias,

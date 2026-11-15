@@ -1,0 +1,67 @@
+# Avances del proyecto — capi-ops
+
+Bitácora cronológica. Cada entrada resume qué se logró, qué se verificó y qué quedó pendiente.
+Para el detalle técnico de un cambio, ver [`CAMBIOS-2026-11-15.md`](./CAMBIOS-2026-11-15.md); para el
+estado consolidado, [`MEMORIA-PROYECTO.md`](./MEMORIA-PROYECTO.md).
+
+---
+
+## Línea de tiempo
+
+| Fecha | Etapa | Hito |
+|---|---|---|
+| 2026-10-29 | 0.1.0 | Watcher multi-Coolify por MCP, health de WAHA, motor de incidentes, bot de Telegram, deploy en EasyPanel |
+| 2026-10-29 | 0.2.0 | `/instancias`, documentación base, CI (typecheck + build) |
+| 2026-10-29 | 0.3.0 | Guía de higiene de disco y scripts de purga del store de WAHA |
+| 2026-10-29 | 0.4.0 | Histórico en Postgres, `/stats` y `GET /stats` |
+| 2026-10-29 | 0.5.0 | `docs/RETOMAR.md` y sección de operación de la base histórica |
+| 2026-10-31 | 0.6.0 | Monitoreo del propio EasyPanel (`/ep`, `/eps`, `/epserv`, acciones con confirmación) |
+| 2026-11-03 | 0.7.0 | Diagnóstico de sesiones WAHA por SSH (`/diag`, `/sesiones`, `/red`, `/historial`, `/fallidas`) |
+| 2026-11-12 | — | *Provision* de servidores Coolify desde el bot (PR #1) + limpiezas de CI |
+| **2026-11-15** | **0.8.0** | **Reconexión del bot + hardening de resiliencia + tests + documentación** |
+
+---
+
+## 2026-11-15 — 0.8.0
+
+### Contexto
+
+El bot de Telegram anterior fue borrado y el servicio quedó en **crash loop**: con el token revocado,
+`bot.start()` rechazaba y Node 24 terminaba el proceso por un *unhandled rejection*. El watcher dejó
+de monitorear y no había forma de avisar (Telegram era el único canal).
+
+### Logros
+
+- **Bot nuevo reconectado**: `@nocodeops_bot` con polling, env actualizado y servicio recreado.
+- **Allowlist corregida**: el `chat_id` configurado no era el del chat real; se obtuvo el correcto y se
+  fijó en `TG_ALLOWED_CHATS`, `TG_ALLOWED_USERS` y `TG_ADMIN_CHAT`.
+- **Resiliencia**: `bot.start()` con `.catch`, handlers de `unhandledRejection` y `uncaughtException`,
+  `main()` con `.catch`. Un fallo de Telegram ya no mata el proceso.
+- **Incidente `ops:telegram`**: si el polling se detiene o hay envíos fallidos repetidos, se abre un
+  incidente crítico que se cierra solo al recuperarse.
+- **Observabilidad**: `/health` incluye `telegramStatus` (polling, último error, fallos consecutivos).
+- **UX**: `setMyCommands` registra el menú de comandos en Telegram al arrancar.
+- **Calidad**: 29 tests unitarios (`rules`, `incidents`, `time`) y `npm test` en CI.
+
+### Verificación
+
+- `npm run typecheck` → OK.
+- `npm test` → 29/29 en verde.
+- `npm run build` → OK.
+- Servicio en producción: `uptimeSeconds` creciente, `lastCycleAt` activo, 6 servidores `reachable`,
+  EasyPanel `reachable`, `telegram: true`.
+
+### Pendiente al cierre
+
+- Integrar la línea local 0.7.0 con la feature de *provision* de `origin/main` antes de desplegar 0.8.0.
+- Configurar `HEARTBEAT_URL`.
+- Retención del histórico y auth en endpoints públicos.
+
+---
+
+## Cómo registrar el próximo avance
+
+1. Agregar una fila a la línea de tiempo con fecha y etapa.
+2. Describir contexto, logros, verificación y pendientes.
+3. Enlazar el documento de cambios si el detalle lo amerita.
+4. Actualizar [`MEMORIA-PROYECTO.md`](./MEMORIA-PROYECTO.md) si cambió el estado o una decisión.

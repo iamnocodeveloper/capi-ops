@@ -1,5 +1,5 @@
 import { promises as dns, setDefaultResultOrder } from 'node:dns';
-import type { WahaHealth } from './types.js';
+import type { WahaHealth, WahaSession } from './types.js';
 
 // Muchos hosts resuelven AAAA sin IPv6 usable: sin esto, fetch se queda colgado.
 setDefaultResultOrder('ipv4first');
@@ -122,16 +122,40 @@ export async function listSessions(
   domain: string,
   apiKey: string,
   timeoutMs = 8000,
-): Promise<Array<{ name: string; status: string; engine?: string }> | null> {
+): Promise<WahaSession[] | null> {
   try {
     const res = await fetch(`https://${domain}/api/sessions?all=true`, {
       headers: { 'X-Api-Key': apiKey },
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) return null;
-    return (await res.json()) as Array<{ name: string; status: string; engine?: string }>;
+    return (await res.json()) as WahaSession[];
   } catch {
     return null;
+  }
+}
+
+export function engineName(session: WahaSession): string | null {
+  if (!session.engine) return null;
+  return typeof session.engine === 'string' ? session.engine : session.engine.engine ?? null;
+}
+
+export function sessionPhone(session: WahaSession): string | null {
+  const id = session.me?.id;
+  return id ? id.replace(/@c\.us$/, '') : null;
+}
+
+export function sessionProxy(session: WahaSession): string | null {
+  return session.config?.proxy?.server ?? null;
+}
+
+export function sessionWebhook(session: WahaSession): string | null {
+  const url = session.config?.webhooks?.[0]?.url ?? null;
+  if (!url) return null;
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
   }
 }
 

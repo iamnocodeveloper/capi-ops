@@ -68,9 +68,15 @@ por servidor cuando falla más de una instancia y horario silencioso que solo de
 | `/instancias [srv]` | Inventario: instancia, contenedor, salud web y dominio. Sin argumento recorre todo |
 | `/servidores` | IP, cantidad de aplicaciones y rango de instancias |
 | `/salud [srv]` | CPU, memoria, disco, load y despliegues en curso |
-| `/waha <instancia\|uuid>` | Estado de una instancia, sesiones de WhatsApp y DNS |
+| `/waha <instancia\|uuid>` | Estado de una instancia, sesiones de WhatsApp (teléfono, presencia, proxy) y DNS |
+| `/sesiones <instancia\|oficina>` | Tabla por sesión: estado, teléfono, presencia, última actividad y proxy |
+| `/diag <instancia\|oficina> [sesión] [cuándo]` | Motivo exacto de una sesión `FAILED` + extracto del log de esa ventana |
+| `/fallidas [srv\|oficina]` | Barrido de todas las sesiones `FAILED` con motivo y antigüedad |
+| `/historial <instancia> [sesión] [días]` | Logouts y fallos del log retenido, con fecha y motivo |
+| `/red <instancia\|srv\|oficina>` | IP de salida (host y contenedor), proxy por contenedor y por sesión |
+| `/oficinas` | Mapeo oficina → servidor/instancia |
 | `/buscar <texto>` | Busca aplicaciones y dominios en toda la flota |
-| `/logs <instancia> [n]` | Últimas líneas de un contenedor |
+| `/logs <instancia> [n] [desde..hasta]` | Últimas líneas o una ventana horaria con timestamps |
 | `/ep` · `/eps` · `/epserv` | Host EasyPanel, servicios con estado/CPU/HTTP/dominio y detalle de uno |
 | `/epdeploy` · `/eprestart` · `/epstop` · `/epstart` | Acciones sobre un servicio de EasyPanel, con botón de confirmación |
 | `/incidentes` · `/auditoria` | Incidentes abiertos · últimas acciones ejecutadas |
@@ -187,6 +193,7 @@ cp .env.example .env
 cp config/servers.example.json config/servers.json
 
 npm run dev        # sin TG_TOKEN corre en modo consola
+npm test           # tests unitarios (rules, incidents, time)
 ```
 
 ### Conectar tus paneles
@@ -275,6 +282,10 @@ docker run -d --name capi-ops -p 8080:8080 \
 | `TG_ADMIN_CHAT` | Chat para auditoría de acciones destructivas | primer chat |
 | `CAPIx_TOKEN` | Token MCP de cada panel (referenciado desde la flota) | — |
 | `WAHA_API_KEY` | `X-Api-Key` de las instancias | — |
+| `DIAG_SSH` | Habilita el diagnóstico con ventana horaria por SSH | `true` |
+| `DIAG_TZ` | Zona horaria de los comandos (`/diag`, `/logs`) | `America/Argentina/Buenos_Aires` |
+| `CAPIx_SSH_PASSWORD` | Password SSH por servidor (referenciada desde `servers.json`) | — |
+| `OFFICES_FILE` · `OFFICES_JSON` | Mapeo oficina → servidor/instancia | `./config/oficinas.json` |
 | `SERVERS_JSON` | Flota completa en JSON inline (prioridad sobre el archivo) | vacío |
 | `OPS_READ_ONLY` | Bloquea toda acción que no sea de lectura | `false` |
 | `POLL_SECONDS` | Ciclo del watcher | `60` |
@@ -323,7 +334,7 @@ las alertas más frecuentes del período.
 
 | Endpoint | Qué devuelve |
 |---|---|
-| `GET /health` | Estado del servicio y snapshot de la flota |
+| `GET /health` | Estado del servicio, de Telegram (`telegramStatus`) y snapshot de la flota |
 | `GET /metrics` | Métricas en formato Prometheus |
 | `GET /stats?days=7` | Uptime por servidor, disponibilidad WAHA, alertas y acciones del histórico |
 | `POST /intent` | Hook para un front LLM. Requiere header `x-ops-token` y solo acepta intents de un enum cerrado |
@@ -349,6 +360,9 @@ src/
   incidents.ts  máquina de estados y política de notificación
   installer.ts  numeración, elección de servidor, deploy y verificación
   ops.ts        deploy / restart / stop / delete / logs
+  ssh.ts        ejecutor SSH de solo lectura
+  diagnostics.ts motivo de FAILED, historial, IP/proxy
+  time.ts       parseo de fechas ART → UTC
   bot.ts        comandos, allowlist, confirmaciones
   http.ts       /health, /metrics, /intent
   db.ts         SQLite: incidentes, métricas, inventario, auditoría
@@ -379,10 +393,13 @@ docs/           arquitectura, operación y assets
 | Documento | Contenido |
 |---|---|
 | [`docs/RETOMAR.md`](./docs/RETOMAR.md) | **Empezá acá.** Estado del proyecto, verificación en cinco minutos, decisiones, pendientes y reglas de oro. |
+| [`docs/MEMORIA-PROYECTO.md`](./docs/MEMORIA-PROYECTO.md) | Memoria viva: qué es, estado actual, topología, trampas conocidas y próximos pasos. |
+| [`docs/AVANCES.md`](./docs/AVANCES.md) | Bitácora cronológica de etapas y hitos. |
 | [`docs/arquitectura.md`](./docs/arquitectura.md) | Decisiones con su motivo, flujo del ciclo, módulos, modelo de datos y puntos de extensión. |
 | [`docs/operacion.md`](./docs/operacion.md) | Runbook: deploy, workaround de recreación, rotación de tokens, alta de paneles, troubleshooting. |
 | [`docs/easypanel.md`](./docs/easypanel.md) | Monitoreo del panel propio: endpoints, estados, reglas, comandos, límites y troubleshooting. |
 | [`docs/higiene-disco.md`](./docs/higiene-disco.md) | Qué ocupa disco, diagnóstico, limpieza de host y purga del store de WAHA con rollback. |
+| [`docs/diagnostico-sesiones.md`](./docs/diagnostico-sesiones.md) | `/diag`: motivos de FAILED, ventanas horarias, IP/proxy y troubleshooting. |
 | [`CHANGELOG.md`](./CHANGELOG.md) | Historial de versiones. |
 
 ---

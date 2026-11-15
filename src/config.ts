@@ -1,7 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { z } from 'zod';
-import type { EasyPanelCfg, FleetCfg, ServerCfg } from './types.js';
+import type { EasyPanelCfg, FleetCfg, Offices, ServerCfg } from './types.js';
 
 function loadDotEnv(path: string): void {
   if (!existsSync(path)) return;
@@ -68,6 +68,9 @@ const EnvSchema = z.object({
   SERVERS_FILE: z.string().optional().default('./config/servers.json'),
   INTENT_TOKEN: z.string().optional().default(''),
   LOG_LEVEL: z.string().optional().default('info'),
+  DIAG_SSH: bool(true),
+  DIAG_TZ: z.string().optional().default('America/Argentina/Buenos_Aires'),
+  OFFICES_FILE: z.string().optional().default('./config/oficinas.json'),
 });
 
 export const env = EnvSchema.parse(process.env);
@@ -84,6 +87,16 @@ const ServerSchema = z.object({
   serverUuid: z.string().min(1),
   destinationUuid: z.string().min(1),
   wahaRange: z.tuple([z.number(), z.number()]),
+  ssh: z
+    .object({
+      host: z.string().optional(),
+      port: z.number().optional(),
+      user: z.string().optional(),
+      passwordEnv: z.string().optional(),
+      keyPath: z.string().optional(),
+      hostKey: z.string().optional(),
+    })
+    .optional(),
 });
 
 const FleetSchema = z.object({
@@ -131,6 +144,29 @@ export function loadFleet(path = env.SERVERS_FILE): FleetCfg {
     );
   }
   return parseFleet(JSON.parse(readFileSync(abs, 'utf8')));
+}
+
+const OfficesSchema = z.record(
+  z.string().min(1),
+  z.object({ server: z.string().min(1), instance: z.string().min(1) }),
+);
+
+/** Mapeo oficina → servidor/instancia. Prioriza OFFICES_JSON; si no, OFFICES_FILE. */
+export function loadOffices(): Offices {
+  const inline = process.env.OFFICES_JSON?.trim();
+  if (inline) {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(inline);
+    } catch (err) {
+      throw new Error(`OFFICES_JSON no es JSON válido: ${(err as Error).message}`);
+    }
+    return OfficesSchema.parse(raw) as Offices;
+  }
+
+  const abs = resolve(process.cwd(), env.OFFICES_FILE);
+  if (!existsSync(abs)) return {};
+  return OfficesSchema.parse(JSON.parse(readFileSync(abs, 'utf8'))) as Offices;
 }
 
 export function tokenOf(s: ServerCfg): string {

@@ -9,6 +9,15 @@ export interface WahaSettings {
   dashboardUser: string;
 }
 
+export interface SshCfg {
+  host?: string;
+  port?: number;
+  user?: string;
+  passwordEnv?: string;
+  keyPath?: string;
+  hostKey?: string;
+}
+
 export interface ServerCfg {
   alias: string;
   name: string;
@@ -21,6 +30,44 @@ export interface ServerCfg {
   serverUuid: string;
   destinationUuid: string;
   wahaRange: [number, number];
+  ssh?: SshCfg;
+}
+
+export interface OfficeTarget {
+  server: string;
+  instance: string;
+}
+
+export type Offices = Record<string, OfficeTarget>;
+
+export interface WahaSessionMe {
+  id?: string | null;
+  pushName?: string | null;
+  reachoutTimelock?: {
+    isActive?: boolean;
+    enforcementType?: string;
+    timeEnforcementEnds?: number | null;
+  } | null;
+  messageCapping?: {
+    cappingStatus?: string;
+    totalQuota?: number;
+    usedQuota?: number;
+    cycleEnd?: number | null;
+  } | null;
+}
+
+export interface WahaSession {
+  name: string;
+  status: string;
+  engine?: string | { engine?: string };
+  me?: WahaSessionMe | null;
+  presence?: string | null;
+  timestamps?: { activity?: number | null };
+  config?: {
+    proxy?: { server?: string; username?: string } | null;
+    webhooks?: Array<{ url?: string }>;
+    metadata?: Record<string, string>;
+  };
 }
 
 export interface FleetCfg {
