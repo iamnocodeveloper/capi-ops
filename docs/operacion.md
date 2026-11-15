@@ -13,8 +13,8 @@ documento privado del cliente, no en este repo.
 | Health | `GET /health` |
 | Métricas | `GET /metrics` (Prometheus) |
 | Volumen | `data` → `/data` (SQLite) |
-| Bot | `@capiops_bot` (polling, sin webhook) |
-| Monitorea | flota Coolify (`capi1`–`capi4`) + el propio EasyPanel (`ep`) |
+| Bot | `@nocodeops_bot` (polling, sin webhook) |
+| Monitorea | flota Coolify (`capi1`–`capi7`) + el propio EasyPanel (`ep`) |
 | Panel propio | `EASYPANEL_URL` + `EASYPANEL_TOKEN`; ver [`easypanel.md`](./easypanel.md) |
 
 ## Deploy

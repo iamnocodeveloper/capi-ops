@@ -8,7 +8,7 @@ rmSync(LOG, { force: true });
 const log = (l) => appendFileSync(LOG, `${l}\n`);
 
 const TOKEN = process.env.TG_TOKEN;
-const CHAT = process.env.TG_CHAT ?? '6991551082';
+const CHAT = process.env.TG_CHAT ?? '9075458881';
 if (!TOKEN) {
   log('falta TG_TOKEN');
   process.exit(1);
