@@ -3,6 +3,15 @@
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 Versionado semántico.
 
+## [0.9.0] — 2026-11-15
+
+### Agregado
+- **Retención automática del histórico Postgres**: purga al arrancar y luego cada 24 h. Muestras y
+  chequeos a los 30 días, incidentes **resueltos** a los 180 y acciones al año. Los incidentes abiertos
+  nunca se borran. Configurable con `RETENTION_*`: `0` días desactiva una tabla y
+  `RETENTION_ENABLED=false` apaga todo el mecanismo.
+- Variables nuevas documentadas en `.env.example` y README.
+
 ## [0.8.0] — 2026-11-15
 
 ### Agregado

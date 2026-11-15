@@ -105,6 +105,71 @@ export async function initAnalytics(
   }
 }
 
+export interface RetentionCfg {
+  enabled: boolean;
+  samplesDays: number;
+  checksDays: number;
+  incidentsDays: number;
+  actionsDays: number;
+}
+
+export interface RetentionResult {
+  samples: number;
+  checks: number;
+  incidents: number;
+  actions: number;
+}
+
+/**
+ * Purga filas viejas del histórico. Nunca borra incidentes abiertos. Cada tabla con 0 días queda
+ * fuera de la purga. Devuelve cuántas filas borró por tabla, o null si no hay Postgres.
+ */
+export async function pruneAnalytics(
+  cfg: RetentionCfg,
+  log: (line: string, level?: 'info' | 'warn' | 'error') => void = () => {},
+): Promise<RetentionResult | null> {
+  const pool = analytics;
+  if (!pool || !cfg.enabled) return null;
+
+  const run = async (sql: string, days: number): Promise<number> => {
+    if (days <= 0) return 0;
+    const res = await pool.query(sql, [Math.floor(days)]);
+    return res.rowCount ?? 0;
+  };
+
+  const result: RetentionResult = { samples: 0, checks: 0, incidents: 0, actions: 0 };
+  try {
+    result.samples = await run(
+      `DELETE FROM server_samples WHERE ts < now() - ($1::int * interval '1 day')`,
+      cfg.samplesDays,
+    );
+    result.checks = await run(
+      `DELETE FROM waha_checks WHERE ts < now() - ($1::int * interval '1 day')`,
+      cfg.checksDays,
+    );
+    result.incidents = await run(
+      `DELETE FROM incidents WHERE resolved_at IS NOT NULL AND resolved_at < now() - ($1::int * interval '1 day')`,
+      cfg.incidentsDays,
+    );
+    result.actions = await run(
+      `DELETE FROM actions WHERE ts < now() - ($1::int * interval '1 day')`,
+      cfg.actionsDays,
+    );
+  } catch (err) {
+    log(`retención del histórico falló: ${(err as Error).message}`, 'error');
+    return null;
+  }
+
+  const total = result.samples + result.checks + result.incidents + result.actions;
+  if (total > 0) {
+    log(
+      `retención: ${result.samples} muestras, ${result.checks} chequeos, ${result.incidents} incidentes y ${result.actions} acciones purgadas`,
+      'info',
+    );
+  }
+  return result;
+}
+
 function fire(promise: Promise<unknown>): void {
   void promise.catch(() => {});
 }

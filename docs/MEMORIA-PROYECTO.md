@@ -31,6 +31,7 @@ Las decisiones son reglas explícitas, no un LLM: determinista y auditable.
 | Bot | `@nocodeops_bot` por **polling** (sin webhook ni dominio) |
 | Allowlist | chat/usuario/admin autorizados según `TG_ALLOWED_*` del env del servicio |
 | Histórico | Postgres conectado; escribe muestras, chequeos, incidentes y acciones |
+| Retención | automática: 30 días muestras/chequeos, 180 incidentes resueltos, 365 acciones (`RETENTION_*`) |
 | Health | `GET /health` con snapshot de flota, EasyPanel y (nuevo) estado de Telegram |
 | Loki | **no instalado** en el host: los logs solo se ven desde la UI de EasyPanel |
 | Repo desplegado | `origin/main` = `32be1e2` (merge: 0.7.0 + 0.8.0 + *provision*) |
@@ -126,11 +127,10 @@ Buscar: `uptimeSeconds` bajo, `lastCycleAt` reciente, `servers[].reachable`, `ea
 ## 7. Próximos pasos priorizados
 
 1. **`HEARTBEAT_URL`**: check externo (healthchecks.io o similar) para avisar si el host muere.
-2. **Retención del histórico**: purga programada de `server_samples` / `waha_checks`.
-3. **Auth en `/health` y `/metrics`** o cerrar el puerto publicado.
-4. **Rate limit y cooldown** de comandos destructivos por usuario.
-5. **Aviso informativo de deploy** de EasyPanel comparando commit.
-6. **Botones inline** en alertas (Ack / Silenciar / Ver detalle) y `/silenciar`, `/ack`.
+2. **Auth en `/health` y `/metrics`** o cerrar el puerto publicado.
+3. **Rate limit y cooldown** de comandos destructivos por usuario.
+4. **Aviso informativo de deploy** de EasyPanel comparando commit.
+5. **Botones inline** en alertas (Ack / Silenciar / Ver detalle) y `/silenciar`, `/ack`.
 
 ---
 

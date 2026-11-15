@@ -334,6 +334,9 @@ docker run -d --name capi-ops -p 8080:8080 \
 | `QUIET_HOURS` | Silencio, formato `23:00-07:00` | vacío |
 | `DIGEST_AT` | Digest diario | `09:00` |
 | `HEARTBEAT_URL` | Ping externo (healthchecks.io) | vacío |
+| `RETENTION_ENABLED` | Purga automática del histórico Postgres (arranque + cada 24 h) | `true` |
+| `RETENTION_SAMPLES_DAYS` · `RETENTION_CHECKS_DAYS` | Retención de muestras y chequeos (0 = no purgar) | `30` |
+| `RETENTION_INCIDENTS_DAYS` · `RETENTION_ACTIONS_DAYS` | Retención de incidentes resueltos y acciones | `180` / `365` |
 | `INTENT_TOKEN` | Secreto para `POST /intent` | vacío |
 | `PROVISION_USER` · `PROVISION_SSH_PORT` | Usuario y puerto SSH para `/servidor nuevo` | `root` / `22` |
 | `PROVISION_SSH_KEY_PATH` | Llave privada para el alta por SSH (vacío = solo contraseña) | vacío |
@@ -351,6 +354,10 @@ Además del SQLite operativo, el servicio puede escribir todo lo que ve en un **
 consultar tendencias: `DATABASE_URL` habilita las tablas `servers`, `server_samples`, `waha_checks`,
 `incidents`, `actions` e `inventory`. Si la variable está vacía, todo funciona igual pero sin
 histórico.
+
+Con `RETENTION_ENABLED=true` (default), el servicio purga el histórico una vez al arrancar y luego cada
+24 h: muestras y chequeos a los 30 días, incidentes **resueltos** a los 180 y acciones al año. Los
+incidentes abiertos nunca se borran. Cada tabla se puede desactivar con `0` días.
 
 Qué se guarda en cada ciclo:
 

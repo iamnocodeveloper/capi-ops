@@ -68,6 +68,12 @@ const EnvSchema = z.object({
   SERVERS_FILE: z.string().optional().default('./config/servers.json'),
   INTENT_TOKEN: z.string().optional().default(''),
   LOG_LEVEL: z.string().optional().default('info'),
+  // Retención del histórico (Postgres). Un valor 0 desactiva la purga de esa tabla.
+  RETENTION_ENABLED: bool(true),
+  RETENTION_SAMPLES_DAYS: num(30),
+  RETENTION_CHECKS_DAYS: num(30),
+  RETENTION_INCIDENTS_DAYS: num(180),
+  RETENTION_ACTIONS_DAYS: num(365),
   DIAG_SSH: bool(true),
   DIAG_TZ: z.string().optional().default('America/Argentina/Buenos_Aires'),
   OFFICES_FILE: z.string().optional().default('./config/oficinas.json'),
@@ -237,6 +243,18 @@ export const thresholds = {
   diskCrit: env.TH_DISK_CRIT,
   epServiceCpu: env.EP_SERVICE_CPU,
   renotifyMs: env.RENOTIFY_MINUTES * 60_000,
+};
+
+const clampDays = (value: number): number =>
+  Number.isFinite(value) && value > 0 ? Math.min(Math.floor(value), 3650) : 0;
+
+/** Retención del histórico en Postgres. Un valor 0 desactiva la purga de esa tabla. */
+export const retention = {
+  enabled: env.RETENTION_ENABLED,
+  samplesDays: clampDays(env.RETENTION_SAMPLES_DAYS),
+  checksDays: clampDays(env.RETENTION_CHECKS_DAYS),
+  incidentsDays: clampDays(env.RETENTION_INCIDENTS_DAYS),
+  actionsDays: clampDays(env.RETENTION_ACTIONS_DAYS),
 };
 
 /** Parámetros para dar de alta servidores por SSH desde el bot. */

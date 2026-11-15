@@ -1,4 +1,4 @@
-import { env, easyPanelCfg, loadFleet, loadOffices, mergeFleetServers, paths, provisionCfg, telegramCfg, thresholds, wahaApiKey } from './config.js';
+import { env, easyPanelCfg, loadFleet, loadOffices, mergeFleetServers, paths, provisionCfg, retention, telegramCfg, thresholds, wahaApiKey } from './config.js';
 import { Db } from './db.js';
 import { forgetClient } from './mcp.js';
 import { epAsServerSnapshot, probeEasyPanel } from './easypanel.js';
@@ -14,6 +14,7 @@ import { refreshInventory } from './installer.js';
 import {
   initAnalytics,
   loadStats,
+  pruneAnalytics,
   recordAction,
   recordIncidentOpen,
   recordIncidentResolved,
@@ -387,6 +388,7 @@ const BOT_COMMANDS = [
 async function main(): Promise<void> {
   log(`capi-ops arrancando · ${fleet.servers.length} servidores · telegram ${telegramCfg.enabled ? 'on' : 'off'} · solo-lectura ${readOnly}${epCfg ? ' · easypanel on' : ''}`);
   await initAnalytics((line, level) => log(line, level ?? 'info'));
+  await pruneAnalytics(retention, (line, level) => log(line, level ?? 'info'));
   await cycle();
 
   setInterval(() => {
@@ -396,6 +398,10 @@ async function main(): Promise<void> {
   setInterval(() => {
     db.pruneMetrics(30);
   }, 6 * 60 * 60 * 1000);
+
+  setInterval(() => {
+    void pruneAnalytics(retention, (line, level) => log(line, level ?? 'info'));
+  }, 24 * 60 * 60 * 1000);
 
   if (telegramCfg.enabled && bot) {
     void bot.api
