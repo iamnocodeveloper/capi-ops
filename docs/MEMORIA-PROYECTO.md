@@ -33,8 +33,8 @@ Las decisiones son reglas explícitas, no un LLM: determinista y auditable.
 | Histórico | Postgres conectado; escribe muestras, chequeos, incidentes y acciones |
 | Health | `GET /health` con snapshot de flota, EasyPanel y (nuevo) estado de Telegram |
 | Loki | **no instalado** en el host: los logs solo se ven desde la UI de EasyPanel |
-| Repo desplegado | `origin/main` = `5b9bdfb` (*ci: cleanup*), incluye *provision* por SSH |
-| Repo local | rama `wip/0.7.0+0.8.0` con checkpoint de 0.7.0 + 0.8.0 y `origin/main` integrado |
+| Repo desplegado | `origin/main` = `32be1e2` (merge: 0.7.0 + 0.8.0 + *provision*) |
+| Repo local | `main` en `32be1e2` (más un commit de docs posterior) |
 
 ### Integración local ↔ `origin/main`
 
@@ -43,9 +43,8 @@ El 2026-11-15 se integraron las dos líneas que estaban divergentes:
 - Se hizo checkpoint del trabajo local (etapa 0.7.0 + 0.8.0) y se mergeó `origin/main`.
 - Conflictos resueltos conservando **ambas** features: *provision* por SSH y diagnóstico de sesiones.
 - Validado con `npm run typecheck`, `npm test` (29/29) y `npm run build`.
-
-Pendiente: publicar `main` y desplegar. Ver
-[`CAMBIOS-2026-11-15.md#publicar-y-desplegar`](./CAMBIOS-2026-11-15.md#publicar-y-desplegar).
+- Publicado (`git push`) y desplegado el 2026-11-15 en el commit `32be1e2`; `/health` confirma
+  `telegramStatus.polling: true`, 0 fallos y 6 servidores `reachable`.
 
 ---
 
@@ -126,14 +125,12 @@ Buscar: `uptimeSeconds` bajo, `lastCycleAt` reciente, `servers[].reachable`, `ea
 
 ## 7. Próximos pasos priorizados
 
-1. **Publicar y desplegar 0.8.0**: merge a `main`, `git push`, `deployAppService` y verificar
-   `uptimeSeconds` en `/health`.
-2. **`HEARTBEAT_URL`**: check externo (healthchecks.io o similar) para avisar si el host muere.
-3. **Retención del histórico**: purga programada de `server_samples` / `waha_checks`.
-4. **Auth en `/health` y `/metrics`** o cerrar el puerto publicado.
-5. **Rate limit y cooldown** de comandos destructivos por usuario.
-6. **Aviso informativo de deploy** de EasyPanel comparando commit.
-7. **Botones inline** en alertas (Ack / Silenciar / Ver detalle) y `/silenciar`, `/ack`.
+1. **`HEARTBEAT_URL`**: check externo (healthchecks.io o similar) para avisar si el host muere.
+2. **Retención del histórico**: purga programada de `server_samples` / `waha_checks`.
+3. **Auth en `/health` y `/metrics`** o cerrar el puerto publicado.
+4. **Rate limit y cooldown** de comandos destructivos por usuario.
+5. **Aviso informativo de deploy** de EasyPanel comparando commit.
+6. **Botones inline** en alertas (Ack / Silenciar / Ver detalle) y `/silenciar`, `/ack`.
 
 ---
 

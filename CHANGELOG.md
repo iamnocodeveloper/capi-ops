@@ -22,8 +22,8 @@ Versionado semántico.
 - Reconexión a un bot nuevo (`@nocodeops_bot`) y corrección de la allowlist con el `chat_id` real.
 
 ### Notas
-- Los cambios se validaron en el árbol local; la integración con `origin/main` (feature de *provision*
-  por SSH) y el despliegue quedan documentados en `docs/CAMBIOS-2026-11-15.md`.
+- Integrado con `origin/main` (feature de *provision* por SSH) y desplegado el 2026-11-15 en el commit
+  `32be1e2`. Detalle en `docs/CAMBIOS-2026-11-15.md`.
 - `/health` y `/metrics` siguen sin autenticación y publicados en el puerto del host.
 
 ## [0.7.0] — 2026-11-03

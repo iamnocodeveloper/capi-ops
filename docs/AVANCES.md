@@ -45,18 +45,18 @@ de monitorear y no había forma de avisar (Telegram era el único canal).
 - **Integración**: checkpoint del trabajo local + merge de `origin/main`; conflictos resueltos
   conservando *provision* por SSH **y** diagnóstico de sesiones. Validado con typecheck, 29 tests y
   build.
+- **Despliegue**: publicado en `origin/main` y desplegado el 2026-11-15 (commit `32be1e2`).
 
 ### Verificación
 
 - `npm run typecheck` → OK.
 - `npm test` → 29/29 en verde.
 - `npm run build` → OK.
-- Servicio en producción: `uptimeSeconds` creciente, `lastCycleAt` activo, 6 servidores `reachable`,
-  EasyPanel `reachable`, `telegram: true`.
+- Servicio en producción (commit `32be1e2`): `uptimeSeconds` creciente, `lastCycleAt` activo,
+  6 servidores `reachable`, EasyPanel `reachable`, `telegramStatus.polling: true` y 0 fallos.
 
 ### Pendiente al cierre
 
-- Integrar la línea local 0.7.0 con la feature de *provision* de `origin/main` antes de desplegar 0.8.0.
 - Configurar `HEARTBEAT_URL`.
 - Retención del histórico y auth en endpoints públicos.
 

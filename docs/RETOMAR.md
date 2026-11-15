@@ -13,7 +13,7 @@
 >
 > **Integración completada:** el 2026-11-15 se mergeó `origin/main` en la rama local y se resolvieron
 > los conflictos conservando **ambas** features (*provision* por SSH y diagnóstico de sesiones). Validado
-> con typecheck, 29 tests y build. Pendiente: publicar `main` y desplegar 0.8.0.
+> con typecheck, 29 tests y build. Publicado y desplegado el 2026-11-15 en el commit `32be1e2`.
 
 ---
 
@@ -38,11 +38,11 @@ Arquitectura y decisiones: [`arquitectura.md`](./arquitectura.md).
 | Pieza | Estado |
 |---|---|
 | Servicio | corriendo en EasyPanel, contenedor `capi-ops`, puerto publicado `18080` |
-| Salud | `GET /health` responde con el snapshot de la flota |
-| Telegram | bot activo por polling, chat autorizado configurado |
+| Salud | `GET /health` responde con snapshot de la flota y `telegramStatus` |
+| Telegram | bot `@nocodeops_bot` activo por polling, chat autorizado configurado |
 | Histórico | Postgres en Coolify conectado, escribiendo muestras y chequeos |
 | Notificaciones nativas | activas en todos los paneles (caídas, reinicios, disco, deploys) |
-| Repo | público, CI en verde (typecheck + build en Node 24) |
+| Repo | público, CI en verde (typecheck + tests + build en Node 24); desplegado `32be1e2` |
 | Docker Cleanup | configurado en todos los servidores (diario, umbral 70%) |
 | EasyPanel | host, servicios, dominios y updates monitoreados desde el mismo servicio (alias `ep`) |
 | Alertas EasyPanel | prefijo `EasyPanel · cliente/servicio`; update 2.37.0 pendiente |
@@ -144,25 +144,23 @@ y en `.env.example`.
 
 ## 7. Pendientes, en orden de valor
 
-1. **Publicar y desplegar 0.8.0.** Merge a `main`, `git push`, `deployAppService` con `forceRebuild` y
-   verificar `uptimeSeconds` en `/health`.
-2. **`HEARTBEAT_URL`.** capi-ops corre en el mismo EasyPanel que vigila: si el host se cae, no puede
+1. **`HEARTBEAT_URL`.** capi-ops corre en el mismo EasyPanel que vigila: si el host se cae, no puede
    avisar. Crear un check externo (healthchecks.io o similar), cargar la URL y recrear.
-3. **Retención del histórico.** `server_samples` y `waha_checks` crecen a diario. Falta una purga
+2. **Retención del histórico.** `server_samples` y `waha_checks` crecen a diario. Falta una purga
    programada (30 días para muestras y chequeos, más para incidentes y acciones). Las consultas están
    listas en [`operacion.md`](./operacion.md).
-4. **Aviso por deploy de EasyPanel.** Hoy no se detecta cada deploy; se puede comparar el commit
+3. **Aviso por deploy de EasyPanel.** Hoy no se detecta cada deploy; se puede comparar el commit
    desplegado contra el anterior y emitir un hallazgo informativo.
-5. **Comandos `/store`, `/purgar` y `/limpiar`.** El procedimiento está probado a mano y documentado
+4. **Comandos `/store`, `/purgar` y `/limpiar`.** El procedimiento está probado a mano y documentado
    en [`higiene-disco.md`](./higiene-disco.md); falta exponerlo en el bot usando `docker_cleanup` y
    `manage_scheduled_task` del MCP.
-6. **Volumen para `/app/.sessions`.** Hoy un redeploy borra el store y obliga a re-escanear QR. Es una
+5. **Volumen para `/app/.sessions`.** Hoy un redeploy borra el store y obliga a re-escanear QR. Es una
    decisión de producto: con volumen, el pairing sobrevive pero la purga pasa a ser obligatoria.
-7. **Alertas de sesión de WhatsApp.** El health actual mira HTTP y DNS; leer `/api/sessions` para
+6. **Alertas de sesión de WhatsApp.** El health actual mira HTTP y DNS; leer `/api/sessions` para
    detectar `FAILED` o sesiones caídas sería el siguiente salto de calidad.
-8. **Autenticación en `/health` y `/metrics`.** Hoy no piden credenciales; si el puerto queda público,
+7. **Autenticación en `/health` y `/metrics`.** Hoy no piden credenciales; si el puerto queda público,
    muestran IPs y consumo.
-9. **Rate limit y cooldown de acciones destructivas.** Evita doble click o bucles accidentales desde el
+8. **Rate limit y cooldown de acciones destructivas.** Evita doble click o bucles accidentales desde el
    chat; complementa la confirmación y la auditoría existentes.
 
 ---
