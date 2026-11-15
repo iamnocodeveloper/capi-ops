@@ -20,6 +20,7 @@ estado consolidado, [`MEMORIA-PROYECTO.md`](./MEMORIA-PROYECTO.md).
 | 2026-11-12 | — | *Provision* de servidores Coolify desde el bot (PR #1) + limpiezas de CI |
 | **2026-11-15** | **0.8.0** | **Reconexión del bot + hardening de resiliencia + tests + documentación** |
 | **2026-11-15** | **0.9.0** | **Retención automática del histórico Postgres** |
+| **2026-11-15** | — | **Alta de capi7 + 10 WAHA (`waha85`–`waha94`)** |
 
 ---
 
@@ -76,6 +77,28 @@ de monitorear y no había forma de avisar (Telegram era el único canal).
 
 - `npm run check` (typecheck + 29 tests) y `npm run build` OK.
 - Desplegado en producción (commit `f547ac7`); `/health` sano y Telegram en polling.
+
+---
+
+## 2026-11-15 — Alta de capi7
+
+### Logros
+
+- Servidor **`capi7`** (`68.168.20.3`) instalado desde cero: Ubuntu 26.04, Coolify **4.7.5**, MCP
+  habilitado y token de equipo acuñado.
+- **10 instancias WAHA** (`waha85`–`waha94`) desplegadas con `devlikeapro/waha:latest`
+  (versión **2026.10.1**), engine `GOWS`, 6 variables por app.
+- **Stickers**: `POST /api/sendSticker` está presente (respuesta 400 sin sesión, no 404). WAHA lo
+  incorporó en **2026.8.2**; la versión desplegada lo soporta.
+- Flota de capi-ops ampliada a **7 servidores** y rangos corregidos a los valores reales; `/health`
+  reporta `capi7` con 10 apps y `reachable: true`.
+- Detalle privado: `docs/coolify/capi7.md`.
+
+### Pendiente
+
+- DNS: crear A records `waha85`–`waha94` → `68.168.20.3` (el wildcard de `supercrm.best` apunta a
+  `216.150.1.1`). Hasta entonces los endpoints públicos no llegan; el routing interno de Traefik sí
+  funciona.
 
 ---
 

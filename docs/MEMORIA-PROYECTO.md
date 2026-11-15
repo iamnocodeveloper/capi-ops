@@ -12,7 +12,7 @@
 
 `capi-ops` es un servicio Node 24 + TypeScript que:
 
-- **Vigila** seis paneles Coolify con instancias WAHA (`capi1`–`capi6`) vía MCP (Streamable HTTP).
+- **Vigila** siete paneles Coolify con instancias WAHA (`capi1`–`capi7`) vía MCP (Streamable HTTP).
 - **Vigila** el propio EasyPanel donde corre (`alias ep`) por su API REST.
 - **Avisa** por Telegram cuando algo se rompe, se recupera o hay un digest diario.
 - **Ejecuta** acciones desde el chat: instalar WAHA, deploy/restart/stop/delete, y las equivalentes
@@ -31,6 +31,7 @@ Las decisiones son reglas explícitas, no un LLM: determinista y auditable.
 | Bot | `@nocodeops_bot` por **polling** (sin webhook ni dominio) |
 | Allowlist | chat/usuario/admin autorizados según `TG_ALLOWED_*` del env del servicio |
 | Histórico | Postgres conectado; escribe muestras, chequeos, incidentes y acciones |
+| Flota | 7 servidores Coolify (`capi1`–`capi7`), 93 instancias WAHA (`waha2`–`waha94`); próximo número 95 |
 | Retención | automática: 30 días muestras/chequeos, 180 incidentes resueltos, 365 acciones (`RETENTION_*`) |
 | Health | `GET /health` con snapshot de flota, EasyPanel y (nuevo) estado de Telegram |
 | Loki | **no instalado** en el host: los logs solo se ven desde la UI de EasyPanel |
@@ -51,7 +52,7 @@ El 2026-11-15 se integraron las dos líneas que estaban divergentes:
 
 ## 3. Topología (sin datos sensibles)
 
-- **Flota Coolify**: `capi1`…`capi6`, cada uno con su MCP, rango de instancias WAHA y credenciales
+- **Flota Coolify**: `capi1`…`capi7`, cada uno con su MCP, rango de instancias WAHA y credenciales
   SSH opcionales para diagnóstico.
 - **EasyPanel propio**: host donde corre el servicio; se vigila a sí mismo. Si el host muere, este
   watcher también: depende de un `HEARTBEAT_URL` externo (hoy vacío).
@@ -121,16 +122,22 @@ Buscar: `uptimeSeconds` bajo, `lastCycleAt` reciente, `servers[].reachable`, `ea
 6. **Cambiar la password de un usuario de Coolify revoca todos sus tokens.**
 7. **Credenciales en el chat.** Inspeccionar el env de un servicio vuelca tokens en la conversación;
    si el log se comparte, rotarlos.
+8. **Los dominios WAHA nuevos necesitan A record explícito.** `supercrm.best` tiene un wildcard a
+   `216.150.1.1`; sin A records hacia la IP del servidor, el tráfico no llega y Let's Encrypt no
+   emite el certificado. Pendientes: `waha46`–`waha60` → `65.75.202.90` y `waha85`–`waha94` →
+   `68.168.20.3`.
 
 ---
 
 ## 7. Próximos pasos priorizados
 
-1. **`HEARTBEAT_URL`**: check externo (healthchecks.io o similar) para avisar si el host muere.
-2. **Auth en `/health` y `/metrics`** o cerrar el puerto publicado.
-3. **Rate limit y cooldown** de comandos destructivos por usuario.
-4. **Aviso informativo de deploy** de EasyPanel comparando commit.
-5. **Botones inline** en alertas (Ack / Silenciar / Ver detalle) y `/silenciar`, `/ack`.
+1. **Completar DNS de WAHA**: crear A records `waha46`–`waha60` → `65.75.202.90` y
+   `waha85`–`waha94` → `68.168.20.3` en Spaceship. Sin eso los endpoints públicos no llegan.
+2. **`HEARTBEAT_URL`**: check externo (healthchecks.io o similar) para avisar si el host muere.
+3. **Auth en `/health` y `/metrics`** o cerrar el puerto publicado.
+4. **Rate limit y cooldown** de comandos destructivos por usuario.
+5. **Aviso informativo de deploy** de EasyPanel comparando commit.
+6. **Botones inline** en alertas (Ack / Silenciar / Ver detalle) y `/silenciar`, `/ack`.
 
 ---
 
