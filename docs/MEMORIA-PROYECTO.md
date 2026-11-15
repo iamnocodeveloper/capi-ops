@@ -34,8 +34,8 @@ Las decisiones son reglas explícitas, no un LLM: determinista y auditable.
 | Retención | automática: 30 días muestras/chequeos, 180 incidentes resueltos, 365 acciones (`RETENTION_*`) |
 | Health | `GET /health` con snapshot de flota, EasyPanel y (nuevo) estado de Telegram |
 | Loki | **no instalado** en el host: los logs solo se ven desde la UI de EasyPanel |
-| Repo desplegado | `origin/main` = `32be1e2` (merge: 0.7.0 + 0.8.0 + *provision*) |
-| Repo local | `main` en `32be1e2` (más un commit de docs posterior) |
+| Repo desplegado | `origin/main` = `f547ac7` (0.9.0: retención del histórico) |
+| Repo local | `main` en `f547ac7` + commits de docs |
 
 ### Integración local ↔ `origin/main`
 
@@ -44,8 +44,8 @@ El 2026-11-15 se integraron las dos líneas que estaban divergentes:
 - Se hizo checkpoint del trabajo local (etapa 0.7.0 + 0.8.0) y se mergeó `origin/main`.
 - Conflictos resueltos conservando **ambas** features: *provision* por SSH y diagnóstico de sesiones.
 - Validado con `npm run typecheck`, `npm test` (29/29) y `npm run build`.
-- Publicado (`git push`) y desplegado el 2026-11-15 en el commit `32be1e2`; `/health` confirma
-  `telegramStatus.polling: true`, 0 fallos y 6 servidores `reachable`.
+- Publicado (`git push`) y desplegado el 2026-11-15; `/health` confirma `telegramStatus.polling: true`,
+  0 fallos y 6 servidores `reachable`. Versión actual: **0.9.0** (`f547ac7`).
 
 ---
 

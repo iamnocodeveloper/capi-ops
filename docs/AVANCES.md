@@ -19,6 +19,7 @@ estado consolidado, [`MEMORIA-PROYECTO.md`](./MEMORIA-PROYECTO.md).
 | 2026-11-03 | 0.7.0 | Diagnóstico de sesiones WAHA por SSH (`/diag`, `/sesiones`, `/red`, `/historial`, `/fallidas`) |
 | 2026-11-12 | — | *Provision* de servidores Coolify desde el bot (PR #1) + limpiezas de CI |
 | **2026-11-15** | **0.8.0** | **Reconexión del bot + hardening de resiliencia + tests + documentación** |
+| **2026-11-15** | **0.9.0** | **Retención automática del histórico Postgres** |
 
 ---
 
@@ -58,7 +59,23 @@ de monitorear y no había forma de avisar (Telegram era el único canal).
 ### Pendiente al cierre
 
 - Configurar `HEARTBEAT_URL`.
-- Retención del histórico y auth en endpoints públicos.
+- Auth en endpoints públicos.
+
+---
+
+## 2026-11-15 — 0.9.0
+
+### Logros
+
+- **Retención automática del histórico Postgres**: purga al arrancar y cada 24 h. Muestras y chequeos
+  a 30 días, incidentes **resueltos** a 180 y acciones a 365.
+- Configurable con `RETENTION_*`; `0` días desactiva una tabla y `RETENTION_ENABLED=false` apaga todo.
+- Los incidentes abiertos nunca se borran.
+
+### Verificación
+
+- `npm run check` (typecheck + 29 tests) y `npm run build` OK.
+- Desplegado en producción (commit `f547ac7`); `/health` sano y Telegram en polling.
 
 ---
 

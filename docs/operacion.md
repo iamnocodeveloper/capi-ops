@@ -234,7 +234,12 @@ union all select 'actions', count(*) from actions;
 docker exec <contenedor-postgres> pg_dump -U <usuario> -d <base> -Fc > backup-$(date +%F).dump
 ```
 
-**Retención sugerida** (todavía no está automatizada)
+**Retención** (automática desde 0.9.0)
+
+El servicio purga por su cuenta al arrancar y luego cada 24 h, con `RETENTION_SAMPLES_DAYS=30`,
+`RETENTION_CHECKS_DAYS=30`, `RETENTION_INCIDENTS_DAYS=180` y `RETENTION_ACTIONS_DAYS=365`.
+`RETENTION_ENABLED=false` apaga la purga; un `0` desactiva una tabla puntual. Los incidentes abiertos
+nunca se borran. El SQL equivalente, por si hace falta correrlo a mano:
 
 ```sql
 -- muestras y chequeos: 30 días
@@ -246,8 +251,8 @@ delete from incidents where resolved_at is not null and resolved_at < now() - in
 delete from actions where ts < now() - interval '365 days';
 ```
 
-Correr una vez por semana desde una tarea programada del panel o desde `psql`. Sin retención, las dos
-tablas de muestreo crecen del orden de miles de filas por día.
+El histórico sin retención crece del orden de miles de filas por día. Con los defaults alcanza para
+mantenerlo acotado; para forzar una purga puntual, correr el SQL desde `psql`.
 
 ## Seguridad
 
