@@ -42,6 +42,9 @@ de monitorear y no había forma de avisar (Telegram era el único canal).
 - **Observabilidad**: `/health` incluye `telegramStatus` (polling, último error, fallos consecutivos).
 - **UX**: `setMyCommands` registra el menú de comandos en Telegram al arrancar.
 - **Calidad**: 29 tests unitarios (`rules`, `incidents`, `time`) y `npm test` en CI.
+- **Integración**: checkpoint del trabajo local + merge de `origin/main`; conflictos resueltos
+  conservando *provision* por SSH **y** diagnóstico de sesiones. Validado con typecheck, 29 tests y
+  build.
 
 ### Verificación
 

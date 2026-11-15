@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { IncidentRow, Severity } from './types.js';
+import type { IncidentRow, Severity, StoredFleetServer } from './types.js';
 
 const SCHEMA = `
 PRAGMA journal_mode = WAL;
@@ -62,6 +62,25 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- Servidores dados de alta en caliente desde el bot (fusión con SERVERS_JSON).
+-- El token se guarda acá: nunca se escribe en el log ni se imprime en el chat.
+CREATE TABLE IF NOT EXISTS fleet_servers (
+  alias TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  ip TEXT NOT NULL,
+  token TEXT NOT NULL,
+  token_env TEXT NOT NULL,
+  project_uuid TEXT NOT NULL,
+  environment_name TEXT NOT NULL,
+  server_uuid TEXT NOT NULL,
+  destination_uuid TEXT NOT NULL,
+  waha_from INTEGER NOT NULL,
+  waha_to INTEGER NOT NULL,
+  added_by INTEGER,
+  created_at INTEGER NOT NULL
+);
 `;
 
 export class Db {
@@ -96,6 +115,83 @@ export class Db {
 
   setLastWahaNumber(n: number): void {
     this.setSetting('last_waha_number', String(n));
+  }
+
+  // ── servidores añadidos en caliente ────────────────────────
+  /** Da de alta (o pisa) un servidor de la flota que vive en SQLite. */
+  addFleetServer(server: StoredFleetServer): void {
+    this.raw
+      .prepare(
+        `INSERT INTO fleet_servers
+           (alias, name, url, ip, token, token_env, project_uuid, environment_name,
+            server_uuid, destination_uuid, waha_from, waha_to, added_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(alias) DO UPDATE SET
+           name = excluded.name, url = excluded.url, ip = excluded.ip, token = excluded.token,
+           token_env = excluded.token_env, project_uuid = excluded.project_uuid,
+           environment_name = excluded.environment_name, server_uuid = excluded.server_uuid,
+           destination_uuid = excluded.destination_uuid, waha_from = excluded.waha_from,
+           waha_to = excluded.waha_to, added_by = excluded.added_by, created_at = excluded.created_at`,
+      )
+      .run(
+        server.alias,
+        server.name,
+        server.url,
+        server.ip,
+        server.token ?? '',
+        server.tokenEnv,
+        server.projectUuid,
+        server.environmentName,
+        server.serverUuid,
+        server.destinationUuid,
+        server.wahaRange[0],
+        server.wahaRange[1],
+        server.addedBy,
+        server.createdAt,
+      );
+  }
+
+  /** Servidores dados de alta desde el bot, listos para fusionar con la flota base. */
+  fleetServers(): StoredFleetServer[] {
+    const rows = this.raw
+      .prepare('SELECT * FROM fleet_servers ORDER BY alias')
+      .all() as Array<{
+      alias: string;
+      name: string;
+      url: string;
+      ip: string;
+      token: string;
+      token_env: string;
+      project_uuid: string;
+      environment_name: string;
+      server_uuid: string;
+      destination_uuid: string;
+      waha_from: number;
+      waha_to: number;
+      added_by: number | null;
+      created_at: number;
+    }>;
+    return rows.map((r) => ({
+      alias: r.alias,
+      name: r.name,
+      url: r.url,
+      ip: r.ip,
+      token: r.token,
+      tokenEnv: r.token_env,
+      projectUuid: r.project_uuid,
+      environmentName: r.environment_name,
+      serverUuid: r.server_uuid,
+      destinationUuid: r.destination_uuid,
+      wahaRange: [r.waha_from, r.waha_to] as [number, number],
+      addedBy: r.added_by,
+      createdAt: r.created_at,
+    }));
+  }
+
+  /** Borra un servidor de la flota en caliente. Devuelve true si existía. */
+  removeFleetServer(alias: string): boolean {
+    const info = this.raw.prepare('DELETE FROM fleet_servers WHERE alias = ?').run(alias);
+    return Number(info.changes) > 0;
   }
 
   // ── inventory ──────────────────────────────────────────────

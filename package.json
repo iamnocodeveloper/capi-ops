@@ -14,6 +14,7 @@
     "diag": "tsx scripts/diag-session.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/rules.test.ts test/incidents.test.ts test/time.test.ts",
+    "check:provision": "tsx scripts/check-provision.ts",
     "check": "npm run typecheck && npm test"
   },
   "dependencies": {

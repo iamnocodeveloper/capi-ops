@@ -1,5 +1,6 @@
-import { env, easyPanelCfg, loadFleet, loadOffices, paths, telegramCfg, thresholds, wahaApiKey } from './config.js';
+import { env, easyPanelCfg, loadFleet, loadOffices, mergeFleetServers, paths, provisionCfg, telegramCfg, thresholds, wahaApiKey } from './config.js';
 import { Db } from './db.js';
+import { forgetClient } from './mcp.js';
 import { epAsServerSnapshot, probeEasyPanel } from './easypanel.js';
 import { AlertEngine, parseQuietHours } from './incidents.js';
 import { createBot } from './bot.js';
@@ -8,7 +9,7 @@ import { isWaha, probeServer } from './probe.js';
 import { evaluate, evaluateEasyPanel, type Finding } from './rules.js';
 import { TelegramNotifier } from './telegram.js';
 import { checkWaha, mapLimit } from './waha.js';
-import type { EpSnapshot, FleetCfg, ServerSnapshot, WahaHealth } from './types.js';
+import type { EpSnapshot, FleetCfg, ServerCfg, ServerSnapshot, WahaHealth } from './types.js';
 import { refreshInventory } from './installer.js';
 import {
   initAnalytics,
@@ -31,11 +32,13 @@ function log(line: string, level: keyof typeof levels = 'info'): void {
   console.log(`${ts} ${level.toUpperCase().padEnd(5)} ${line}`);
 }
 
-const fleet: FleetCfg = loadFleet();
+const baseFleet: FleetCfg = loadFleet();
 const offices = loadOffices();
 const epCfg = easyPanelCfg();
 let epSnapshot: EpSnapshot | null = null;
 const db = new Db(paths.db);
+// La flota es la base (SERVERS_JSON/archivo) más los servidores dados de alta en caliente (SQLite).
+const fleet: FleetCfg = mergeFleetServers(baseFleet, db.fleetServers());
 const notifier = new TelegramNotifier((l) => log(l, 'warn'));
 const quiet = parseQuietHours(env.QUIET_HOURS);
 
@@ -274,6 +277,30 @@ async function maybeDigest(): Promise<void> {
   await notifier.broadcast(text, 'info');
 }
 
+/** Callbacks de alta/baja de servidores, compartidos por el bot y el HTTP. */
+const serverAdmin = {
+  provisionCfg: () => provisionCfg,
+  addServer: (server: ServerCfg, addedBy: number): void => {
+    db.addFleetServer({ ...server, addedBy, createdAt: Date.now() });
+    const existing = fleet.servers.findIndex((s) => s.alias === server.alias);
+    if (existing >= 0) fleet.servers[existing] = server;
+    else fleet.servers.push(server);
+    forgetClient(server.alias);
+    // Sin secretos: solo alias e IP.
+    log(`servidor añadido: ${server.alias} (${server.ip})`, 'warn');
+    void refresh(true);
+  },
+  removeServer: (alias: string): boolean => {
+    const removed = db.removeFleetServer(alias);
+    const idx = fleet.servers.findIndex((s) => s.alias === alias);
+    if (idx >= 0) fleet.servers.splice(idx, 1);
+    forgetClient(alias);
+    if (removed || idx >= 0) log(`servidor quitado: ${alias}`, 'warn');
+    return removed || idx >= 0;
+  },
+  hotServers: () => db.fleetServers(),
+};
+
 const bot = telegramCfg.enabled
   ? createBot({
       db,
@@ -293,6 +320,7 @@ const bot = telegramCfg.enabled
       refreshEp,
       easyPanel: () => epCfg,
       offices,
+      ...serverAdmin,
       log: (l) => log(l, 'warn'),
     })
   : null;
@@ -314,6 +342,7 @@ const http = startHttp({
   refreshEp,
   easyPanel: () => epCfg,
   offices,
+  ...serverAdmin,
   log,
   startedAt,
   lastCycleAt: () => lastCycleAt,
@@ -342,6 +371,7 @@ const BOT_COMMANDS = [
   { command: 'eps', description: 'Servicios de EasyPanel con estado y CPU' },
   { command: 'epserv', description: 'Detalle de un servicio de EasyPanel' },
   { command: 'instalar', description: 'Crea instancias WAHA' },
+  { command: 'servidor', description: 'Alta de servidores Coolify (nuevo/agregar/quitar)' },
   { command: 'deploy', description: 'Despliega una instancia' },
   { command: 'restart', description: 'Reinicia una instancia' },
   { command: 'stop', description: 'Detiene una instancia' },

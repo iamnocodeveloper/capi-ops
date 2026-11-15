@@ -71,6 +71,12 @@ const EnvSchema = z.object({
   DIAG_SSH: bool(true),
   DIAG_TZ: z.string().optional().default('America/Argentina/Buenos_Aires'),
   OFFICES_FILE: z.string().optional().default('./config/oficinas.json'),
+  // Alta de servidores por SSH desde el bot
+  PROVISION_USER: z.string().optional().default('root'),
+  PROVISION_SSH_KEY_PATH: z.string().optional().default(''),
+  PROVISION_SSH_PORT: num(22),
+  PROVISION_TIMEOUT_MINUTES: num(12),
+  PROVISION_PROJECT_NAME: z.string().optional().default('capi-ops'),
 });
 
 export const env = EnvSchema.parse(process.env);
@@ -232,3 +238,24 @@ export const thresholds = {
   epServiceCpu: env.EP_SERVICE_CPU,
   renotifyMs: env.RENOTIFY_MINUTES * 60_000,
 };
+
+/** Parámetros para dar de alta servidores por SSH desde el bot. */
+export const provisionCfg = {
+  user: env.PROVISION_USER || 'root',
+  sshPort: env.PROVISION_SSH_PORT,
+  keyPath: env.PROVISION_SSH_KEY_PATH.trim(),
+  timeoutMs: Math.max(env.PROVISION_TIMEOUT_MINUTES, 3) * 60_000,
+  projectName: env.PROVISION_PROJECT_NAME || 'capi-ops',
+};
+
+/**
+ * Fusiona la flota base (`SERVERS_JSON` / archivo) con los servidores dados de alta en caliente
+ * desde el bot. La base manda: si un alias ya existe, no se pisa.
+ */
+export function mergeFleetServers(base: FleetCfg, extra: ServerCfg[]): FleetCfg {
+  const servers = [...base.servers];
+  for (const server of extra) {
+    if (!servers.some((s) => s.alias === server.alias)) servers.push(server);
+  }
+  return { ...base, servers };
+}

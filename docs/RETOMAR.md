@@ -11,9 +11,9 @@
 > `uncaughtException`, `setMyCommands`, 29 tests y documentación de memoria/avances. Ver
 > [`CAMBIOS-2026-11-15.md`](./CAMBIOS-2026-11-15.md).
 >
-> **Divergencia pendiente:** `origin/main` tiene la feature de *provision* por SSH y **no** la etapa
-> 0.7.0 (diag/ssh); el árbol local tiene 0.7.0 sin commitear y **no** *provision*. Hay que integrar
-> ambas líneas antes de desplegar 0.8.0 (procedimiento en el documento de cambios).
+> **Integración completada:** el 2026-11-15 se mergeó `origin/main` en la rama local y se resolvieron
+> los conflictos conservando **ambas** features (*provision* por SSH y diagnóstico de sesiones). Validado
+> con typecheck, 29 tests y build. Pendiente: publicar `main` y desplegar 0.8.0.
 
 ---
 
@@ -144,8 +144,8 @@ y en `.env.example`.
 
 ## 7. Pendientes, en orden de valor
 
-1. **Integrar las dos líneas de trabajo.** Unir la etapa 0.7.0 del árbol local (diag/ssh) con la feature
-   de *provision* de `origin/main`; dejar `main` verde con `npm run check` y desplegar 0.8.0.
+1. **Publicar y desplegar 0.8.0.** Merge a `main`, `git push`, `deployAppService` con `forceRebuild` y
+   verificar `uptimeSeconds` en `/health`.
 2. **`HEARTBEAT_URL`.** capi-ops corre en el mismo EasyPanel que vigila: si el host se cae, no puede
    avisar. Crear un check externo (healthchecks.io o similar), cargar la URL y recrear.
 3. **Retención del histórico.** `server_samples` y `waha_checks` crecen a diario. Falta una purga

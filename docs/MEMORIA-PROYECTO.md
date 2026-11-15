@@ -34,21 +34,18 @@ Las decisiones son reglas explícitas, no un LLM: determinista y auditable.
 | Health | `GET /health` con snapshot de flota, EasyPanel y (nuevo) estado de Telegram |
 | Loki | **no instalado** en el host: los logs solo se ven desde la UI de EasyPanel |
 | Repo desplegado | `origin/main` = `5b9bdfb` (*ci: cleanup*), incluye *provision* por SSH |
-| Repo local | `HEAD` = `0454381`, con la etapa 0.7.0 (diag/ssh) **sin commitear** |
+| Repo local | rama `wip/0.7.0+0.8.0` con checkpoint de 0.7.0 + 0.8.0 y `origin/main` integrado |
 
-### Divergencia local ↔ `origin/main` (importante)
+### Integración local ↔ `origin/main`
 
-Hay dos líneas de trabajo que todavía no se integraron:
+El 2026-11-15 se integraron las dos líneas que estaban divergentes:
 
-- **`origin/main`** (lo que corre en producción): *provision* de servidores Coolify por SSH +
-  limpiezas de CI. **No** incluye la etapa 0.7.0 de diagnóstico (`/diag`, `/sesiones`, `/red`,
-  `/historial`, `src/time.ts`, `src/ssh.ts`, `src/diagnostics.ts`).
-- **Árbol local** (`D:\PROYECTOS\Cliente-capi\capi-ops`): etapa 0.7.0 completa, sin commitear, y
-  **sin** la feature de *provision*.
+- Se hizo checkpoint del trabajo local (etapa 0.7.0 + 0.8.0) y se mergeó `origin/main`.
+- Conflictos resueltos conservando **ambas** features: *provision* por SSH y diagnóstico de sesiones.
+- Validado con `npm run typecheck`, `npm test` (29/29) y `npm run build`.
 
-Consecuencia práctica: **no alcanza con `git push`** desde el estado local; primero hay que integrar
-`origin/main`. El procedimiento recomendado está en
-[`CAMBIOS-2026-11-15.md`](./CAMBIOS-2026-11-15.md#integración-y-despliegue).
+Pendiente: publicar `main` y desplegar. Ver
+[`CAMBIOS-2026-11-15.md#publicar-y-desplegar`](./CAMBIOS-2026-11-15.md#publicar-y-desplegar).
 
 ---
 
@@ -129,8 +126,8 @@ Buscar: `uptimeSeconds` bajo, `lastCycleAt` reciente, `servers[].reachable`, `ea
 
 ## 7. Próximos pasos priorizados
 
-1. **Integrar las dos líneas de trabajo** (0.7.0 local + *provision* de `origin/main`) y dejar `main`
-   verde con typecheck, tests y build.
+1. **Publicar y desplegar 0.8.0**: merge a `main`, `git push`, `deployAppService` y verificar
+   `uptimeSeconds` en `/health`.
 2. **`HEARTBEAT_URL`**: check externo (healthchecks.io o similar) para avisar si el host muere.
 3. **Retención del histórico**: purga programada de `server_samples` / `waha_checks`.
 4. **Auth en `/health` y `/metrics`** o cerrar el puerto publicado.
